@@ -238,6 +238,7 @@
       h('option', { value: NEW_CAT }, '+ Nueva categoría…'));
     const newInp = h('input', { class: INPUT + ' hidden mt-2', placeholder: 'Nombre de la categoría', maxlength: '40', 'aria-label': 'Nueva categoría' });
     const btn = h('button', { class: BTN + ' w-full sm:w-auto', disabled: true, type: 'button' }, 'Guardar');
+    const payBtn = h('button', { class: 'mt-2 text-xs text-slate-400 underline decoration-dotted underline-offset-2 hover:text-slate-200', type: 'button' }, 'Es un pago de tarjeta (no es gasto)');
     const chosen = () => (sel.value === NEW_CAT ? newInp.value.trim() : sel.value);
     const sync = () => { btn.disabled = !validCat(chosen()); };
     sel.addEventListener('change', () => { newInp.classList.toggle('hidden', sel.value !== NEW_CAT); if (sel.value === NEW_CAT) newInp.focus(); sync(); });
@@ -251,7 +252,17 @@
           h('p', { class: 'mt-0.5 text-xs text-slate-500' }, `${fmtDate(it.fecha)} · ${it.banco}`, it.cuotas ? ` · ${it.cuotas} cuotas` : '')),
         h('p', { class: 'shrink-0 font-semibold tabular-nums ' + ((it.monto || 0) < 0 ? 'text-rose-300' : 'text-emerald-300') }, fmtMoney(it.monto))),
       h('div', { class: 'mt-3 flex flex-col gap-2 sm:flex-row sm:items-start' },
-        h('div', { class: 'flex-1' }, sel, newInp), btn));
+        h('div', { class: 'flex-1' }, sel, newInp), btn),
+      kind === 'debito' && payBtn);
+
+    payBtn.addEventListener('click', async () => {
+      payBtn.disabled = true; btn.disabled = true;
+      try {
+        await api('categorize', { id: it.id, pagoTarjeta: true, categoria: 'Pago Tarjeta', onlyIfBlank: true, hoja: 'debito' });
+        toast('Marcado como pago de tarjeta');
+        onDone(li);
+      } catch (e) { toast(errText(e), 'err'); payBtn.disabled = false; sync(); }
+    });
 
     btn.addEventListener('click', async () => {
       const categoria = chosen();
@@ -270,7 +281,7 @@
     return li;
   }
 
-  /* ---------- vista: Ingreso manual ---------- */
+  /* ---------- vista: Nuevo (efectivo / consumo de tarjeta / pago de tarjeta) ---------- */
   const pad = (n) => String(n).padStart(2, '0');
   const nowLocalInput = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   function rand4() {
@@ -281,44 +292,120 @@
   // MAN_YYYYMMDD_HHMM_XXXX (la fecha del ID es la del movimiento)
   const manualId = (local) => `MAN_${local.slice(0, 10).replace(/-/g, '')}_${local.slice(11, 16).replace(':', '')}_${rand4()}`;
 
-  async function viewManual(root) {
-    if (!state.cats.length) { try { mergeCats((await api('getCategories')).categories); } catch { /* el form funciona sin categorías */ } }
-    let pending = null; // {fecha, id}: el mismo ID se reutiliza en reintentos => idempotente
+  const manual = { mode: 'efectivo' };
+  const MODES = [['efectivo', 'Efectivo'], ['consumo', 'Consumo tarjeta'], ['pago', 'Pago tarjeta']];
+  const field = (label, el) => h('label', { class: 'block text-sm text-slate-300' }, label, h('div', { class: 'mt-1' }, el));
+  const catSelect = () => h('select', { class: INPUT }, h('option', { value: '' }, 'Sin categoría (irá al Inbox)'), state.cats.map((c) => h('option', { value: c }, c)));
+  const optSelect = (list) => h('select', { class: INPUT, required: true }, list.map((x) => h('option', { value: x }, x)));
 
-    const fecha = h('input', { type: 'datetime-local', required: true, class: INPUT, value: nowLocalInput() });
-    const tipo = h('select', { class: INPUT }, h('option', { value: 'Egreso' }, 'Egreso (gasto)'), h('option', { value: 'Ingreso' }, 'Ingreso'));
-    const monto = h('input', { type: 'number', required: true, min: '0.01', max: '1000000', step: '0.01', inputmode: 'decimal', class: INPUT, placeholder: '0.00' });
-    const detalle = h('input', { type: 'text', required: true, maxlength: '120', class: INPUT, placeholder: 'Ej. Menú almuerzo' });
-    const desc = h('input', { type: 'text', maxlength: '200', class: INPUT, placeholder: 'Opcional' });
-    const cat = h('select', { class: INPUT }, h('option', { value: '' }, 'Sin categoría (irá al Inbox)'), state.cats.map((c) => h('option', { value: c }, c)));
-    const submit = h('button', { type: 'submit', class: BTN + ' w-full' }, 'Registrar gasto en efectivo');
-    const field = (label, el) => h('label', { class: 'block text-sm text-slate-300' }, label, h('div', { class: 'mt-1' }, el));
-
-    const form = h('form', { class: 'space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-4', autocomplete: 'off' },
-      field('Fecha y hora', fecha),
-      h('div', { class: 'grid grid-cols-2 gap-3' }, field('Tipo', tipo), field('Monto (S/)', monto)),
-      field('Detalle / Comercio', detalle), field('Descripción', desc), field('Categoría', cat), submit);
-
+  /**
+   * Arma un formulario. El ID inmutable se genera una vez por envío y se REUTILIZA en reintentos
+   * (misma fecha), así un doble toque o un corte de red nunca duplica el movimiento en el Sheet.
+   */
+  function buildForm({ idle, action, fecha, fields, collect, done }) {
+    let pending = null;
+    const submit = h('button', { type: 'submit', class: BTN + ' w-full' }, idle);
+    const form = h('form', { class: 'space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-4', autocomplete: 'off' }, fields, submit);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!form.reportValidity()) return;
       if (!pending || pending.fecha !== fecha.value) pending = { fecha: fecha.value, id: manualId(fecha.value) };
       submit.disabled = true; submit.textContent = 'Registrando…';
       try {
-        const r = await api('addManual', {
-          id: pending.id, fecha: fecha.value + ':00', tipo: tipo.value, banco: 'Efectivo',
-          monto: Number(monto.value), detalle: detalle.value.trim(), descripcion: desc.value.trim(), categoria: cat.value,
-        });
-        toast(r.duplicate ? 'Ya estaba registrado (no se duplicó).' : `Registrado ${r.id}`);
-        pending = null;
-        form.reset(); fecha.value = nowLocalInput();
+        const r = await api(action, Object.assign(collect(), { id: pending.id, fecha: fecha.value + ':00' }));
+        toast(r.duplicate ? 'Ya estaba registrado (no se duplicó).' : done(r));
+        pending = null; form.reset(); fecha.value = nowLocalInput();
       } catch (ex) {
         toast(errText(ex), 'err'); // se conserva `pending`: un reintento no duplica
       } finally {
-        submit.disabled = false; submit.textContent = 'Registrar gasto en efectivo';
+        submit.disabled = false; submit.textContent = idle;
       }
     });
-    root.replaceChildren(h('h2', { class: 'mb-3 text-base font-semibold' }, 'Ingreso manual'), form);
+    return form;
+  }
+
+  function formEfectivo() {
+    const fecha = h('input', { type: 'datetime-local', required: true, class: INPUT, value: nowLocalInput() });
+    const tipo = h('select', { class: INPUT }, h('option', { value: 'Egreso' }, 'Egreso (gasto)'), h('option', { value: 'Ingreso' }, 'Ingreso'));
+    const monto = h('input', { type: 'number', required: true, min: '0.01', max: '1000000', step: '0.01', inputmode: 'decimal', class: INPUT, placeholder: '0.00' });
+    const detalle = h('input', { type: 'text', required: true, maxlength: '120', class: INPUT, placeholder: 'Ej. Menú almuerzo' });
+    const desc = h('input', { type: 'text', maxlength: '200', class: INPUT, placeholder: 'Opcional' });
+    const cat = catSelect();
+    return buildForm({
+      idle: 'Registrar en efectivo', action: 'addManual', fecha,
+      fields: [field('Fecha y hora', fecha), h('div', { class: 'grid grid-cols-2 gap-3' }, field('Tipo', tipo), field('Monto (S/)', monto)),
+        field('Detalle / Comercio', detalle), field('Descripción', desc), field('Categoría', cat)],
+      collect: () => ({ tipo: tipo.value, banco: 'Efectivo', monto: Number(monto.value), detalle: detalle.value.trim(), descripcion: desc.value.trim(), categoria: cat.value }),
+      done: (r) => `Registrado ${r.id}`,
+    });
+  }
+
+  function formConsumo(opts) {
+    const fecha = h('input', { type: 'datetime-local', required: true, class: INPUT, value: nowLocalInput() });
+    const tarjeta = optSelect(opts.tarjetas);
+    const monto = h('input', { type: 'number', required: true, min: '0.01', max: '1000000', step: '0.01', inputmode: 'decimal', class: INPUT, placeholder: '0.00' });
+    const detalle = h('input', { type: 'text', required: true, maxlength: '120', class: INPUT, placeholder: 'Ej. Uber' });
+    const modalidad = h('select', { class: INPUT }, h('option', { value: 'Directo' }, 'Directo'), h('option', { value: 'Cuotas Sin Interes' }, 'Cuotas sin interés'));
+    const cuotas = h('input', { type: 'number', min: '2', max: '48', step: '1', inputmode: 'numeric', class: INPUT, placeholder: 'N° de cuotas' });
+    const cuotasBox = h('div', { class: 'hidden' }, field('N° de cuotas', cuotas));
+    const pagado = h('input', { type: 'checkbox', class: 'h-5 w-5 accent-emerald-500' });
+    // contenedor aparte: así `hidden` nunca compite con `flex` en el mismo elemento
+    const pagadoBox = h('div', {}, h('label', { class: 'flex items-center gap-3 text-sm text-slate-300' }, pagado, 'Ya lo pagué (consumir y matar)'));
+    const cat = catSelect();
+    modalidad.addEventListener('change', () => {
+      const isQ = modalidad.value !== 'Directo';
+      cuotasBox.classList.toggle('hidden', !isQ); pagadoBox.classList.toggle('hidden', isQ);
+      cuotas.required = isQ; if (isQ) pagado.checked = false;
+    });
+    return buildForm({
+      idle: 'Registrar consumo', action: 'addCreditConsumo', fecha,
+      fields: [h('p', { class: 'text-xs text-slate-500' }, 'Para tarjetas que no envían correo. Si el consumo ya llega por correo, no lo registres aquí: se duplicaría.'),
+        field('Fecha y hora', fecha), field('Tarjeta', tarjeta), h('div', { class: 'grid grid-cols-2 gap-3' }, field('Monto (S/)', monto), field('Modalidad', modalidad)),
+        cuotasBox, field('Detalle / Comercio', detalle), field('Categoría', cat), pagadoBox],
+      collect: () => ({ tarjeta: tarjeta.value, monto: Number(monto.value), modalidad: modalidad.value, cuotas: modalidad.value === 'Directo' ? null : Number(cuotas.value),
+        detalle: detalle.value.trim(), categoria: cat.value, pagado: pagado.checked }),
+      done: () => 'Consumo registrado en la tarjeta',
+    });
+  }
+
+  function formPago(opts) {
+    const fecha = h('input', { type: 'datetime-local', required: true, class: INPUT, value: nowLocalInput() });
+    const tarjeta = optSelect(opts.tarjetas);
+    const cuenta = optSelect(opts.cuentas);
+    const monto = h('input', { type: 'number', required: true, min: '0.01', max: '1000000', step: '0.01', inputmode: 'decimal', class: INPUT, placeholder: '0.00' });
+    return buildForm({
+      idle: 'Registrar pago de tarjeta', action: 'addPagoTarjeta', fecha,
+      fields: [h('p', { class: 'text-xs text-slate-500' }, 'Crea la salida en Débito y el abono en Crédito (partida doble). Si el pago ya llega por correo (BCP, iO, Falabella, Interbank), no lo registres aquí.'),
+        field('Fecha y hora', fecha), field('Tarjeta que pagas', tarjeta), field('Pagado desde', cuenta), field('Monto (S/)', monto)],
+      collect: () => ({ tarjeta: tarjeta.value, cuenta: cuenta.value, monto: Number(monto.value) }),
+      done: () => 'Pago registrado en Débito y en Crédito',
+    });
+  }
+
+  async function viewManual(root) {
+    root.replaceChildren(loading('Cargando…'));
+    let opts = { tarjetas: [], cuentas: ['BCP', 'Interbank', 'Efectivo'] };
+    try {
+      const r = await api('getCategories');
+      mergeCats(r.categories);
+      opts = { tarjetas: r.tarjetas || [], cuentas: r.cuentas || opts.cuentas };
+    } catch (e) { if (e.code === 'UNAUTHORIZED' || e.code === 'NO_CREDENTIALS') return; /* el modo Efectivo funciona igual */ }
+    renderManual(root, opts);
+  }
+
+  function renderManual(root, opts) {
+    const tabs = h('div', { class: 'mb-3 grid grid-cols-3 gap-1 rounded-xl bg-slate-900 p-1', role: 'tablist' }, MODES.map(([k, label]) => h('button', {
+      type: 'button', role: 'tab', 'aria-selected': manual.mode === k ? 'true' : 'false',
+      class: 'rounded-lg px-2 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (manual.mode === k ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'),
+      onclick: () => { manual.mode = k; renderManual(root, opts); },
+    }, label)));
+    let body;
+    if (manual.mode !== 'efectivo' && !opts.tarjetas.length) {
+      body = h('p', { class: 'rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100' }, 'No se encontraron tarjetas. Despliega la última versión del API y ejecuta fosSetupTarjetas().');
+    } else {
+      body = manual.mode === 'consumo' ? formConsumo(opts) : manual.mode === 'pago' ? formPago(opts) : formEfectivo();
+    }
+    root.replaceChildren(h('h2', { class: 'mb-3 text-base font-semibold' }, 'Nuevo movimiento'), tabs, body);
   }
 
   /* ---------- vista: Calendario de cuotas ---------- */
