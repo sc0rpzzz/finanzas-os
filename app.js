@@ -34,6 +34,7 @@
   const ICONS = { // constantes propias, no datos del usuario
     inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
     calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
     refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/>',
     logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
@@ -322,6 +323,58 @@
     if (th) requestAnimationFrame(() => { wrap.scrollLeft = Math.max(0, th.offsetLeft - 170); });
   }
 
+  /* ---------- vista: Tarjetas ---------- */
+  const fmtD = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : '');
+  const when = (n) => (n < 0 ? `atrasado ${-n} d` : n === 0 ? 'HOY' : n === 1 ? 'mañana' : `en ${n} días`);
+  const pct = (x) => `${(x * 100).toFixed(1)}%`;
+  const TONE = { ok: 'bg-emerald-400', warn: 'bg-amber-400', bad: 'bg-rose-400' };
+
+  function cardPanel(c) {
+    const tone = c.utilizacion <= c.meta ? 'ok' : c.utilizacion <= c.meta * 2 ? 'warn' : 'bad';
+    const scale = Math.max(c.meta * 3, c.utilizacion);
+    const row = (label, value, cls = '') => h('div', { class: 'flex items-baseline justify-between gap-3 py-1 text-sm' },
+      h('span', { class: 'text-slate-400' }, label), h('span', { class: 'text-right tabular-nums ' + cls }, value));
+    const urgent = c.cerrado.monto > 0 && c.cerrado.diasVence !== null && c.cerrado.diasVence <= 3;
+
+    return h('section', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-4' },
+      h('div', { class: 'flex items-baseline justify-between' },
+        h('h3', { class: 'font-semibold' }, c.tarjeta),
+        h('span', { class: 'text-xs text-slate-500' }, `Límite ${fmtMoney(c.limite)}`)),
+      h('div', { class: 'mt-3' },
+        h('div', { class: 'flex items-baseline justify-between text-sm' },
+          h('span', { class: 'text-slate-300' }, 'Utilización al corte'),
+          h('span', { class: 'font-semibold tabular-nums' }, pct(c.utilizacion))),
+        h('div', { class: 'relative mt-1.5 h-2 rounded-full bg-slate-800', role: 'img', 'aria-label': `Utilización ${pct(c.utilizacion)}, meta ${pct(c.meta)}` },
+          h('div', { class: 'h-2 rounded-full ' + TONE[tone], style: `width:${Math.min(100, (c.utilizacion / scale) * 100)}%` }),
+          h('div', { class: 'absolute -top-1 h-4 w-0.5 bg-slate-200', style: `left:${(c.meta / scale) * 100}%`, title: `Meta ${pct(c.meta)}` })),
+        h('p', { class: 'mt-1 text-xs text-slate-500' }, `Meta ${pct(c.meta)} = ${fmtMoney(c.metaMonto)} · tras pagar los consumos: ${pct(c.utilizacionTrasPagar)}`)),
+      h('div', { class: 'mt-3 divide-y divide-slate-800' },
+        row(`Corte ${fmtD(c.corteProx)}`, when(c.diasCorte)),
+        row('Pagar antes del corte', fmtMoney(c.pagarAntesCorte), c.pagarAntesCorte > 0 ? 'font-semibold text-amber-300' : 'text-emerald-300'),
+        c.cerrado.monto > 0 && row(`Estado cerrado · vence ${fmtD(c.cerrado.vence)} (${when(c.cerrado.diasVence)})`, fmtMoney(c.cerrado.monto), urgent ? 'font-semibold text-rose-300' : ''),
+        c.cuotaMes > 0 && row('Cuota del mes', fmtMoney(c.cuotaMes)),
+        c.prestamos > 0 && row('Préstamos por cobrar', fmtMoney(c.prestamos))),
+      c.pendientes.length > 0 && h('details', { class: 'mt-2' },
+        h('summary', { class: 'cursor-pointer text-xs text-slate-400' }, `Ver ${c.pendientes.length} pendiente(s)`),
+        h('ul', { class: 'mt-2 space-y-1 text-xs' }, c.pendientes.map((p) => h('li', { class: 'flex justify-between gap-3 text-slate-300' },
+          h('span', { class: 'truncate' }, `${fmtD(p.fecha)} · ${p.detalle} · `, h('span', { class: 'text-slate-500' }, p.tipo)),
+          h('span', { class: 'tabular-nums' }, fmtMoney(p.monto)))))));
+  }
+
+  async function viewCards(root) {
+    root.replaceChildren(loading('Calculando tarjetas…'));
+    let d;
+    try { d = await api('getCards'); } catch (e) {
+      if (e.code === 'NO_TARJETAS') { root.replaceChildren(h('p', { class: 'rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100' }, 'Falta la hoja «Tarjetas». Ejecuta fosSetupTarjetas() en Apps Script.')); return; }
+      if (e.code !== 'UNAUTHORIZED') root.replaceChildren(failure(e, () => viewCards(root)));
+      return;
+    }
+    root.replaceChildren(
+      h('h2', { class: 'mb-1 text-base font-semibold' }, 'Tarjetas'),
+      h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Meta: al corte, solo la cuota del mes; el resto de consumos en 0.'),
+      h('div', { class: 'space-y-3' }, d.cards.map(cardPanel)));
+  }
+
   /* ---------- sincronizar Yape ---------- */
   async function syncYape() {
     if (!confirm('¿Ya enviaste el correo de Yape desde la app?')) return;
@@ -340,7 +393,7 @@
   }
 
   /* ---------- router ---------- */
-  const VIEWS = { inbox: viewInbox, nuevo: viewManual, calendario: viewCalendar };
+  const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: viewManual, calendario: viewCalendar };
   const currentView = () => { const v = location.hash.slice(1); return VIEWS[v] ? v : 'inbox'; };
   function route() {
     if (!hasCreds()) { openSetup(); return; }
