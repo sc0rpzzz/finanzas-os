@@ -296,7 +296,7 @@
     if (!d.rows.length) { root.replaceChildren(h('p', { class: 'py-10 text-center text-sm text-slate-400' }, 'No hay cuotas registradas.')); return; }
 
     const cur = norm(d.currentMonth);
-    const curIdx = d.months.findIndex((m) => norm(m) === cur);
+    const curIdx = d.currentIndex != null ? d.currentIndex : d.months.findIndex((m) => norm(m) === cur);
     const totals = d.months.map((_, i) => d.rows.reduce((s, r) => s + (r.montos[i] || 0), 0));
     const cell = 'px-3 py-2 text-right tabular-nums whitespace-nowrap';
     const hi = (i) => (i === curIdx ? ' bg-emerald-500/10 border-x border-emerald-500/40 text-emerald-200 font-medium' : '');
