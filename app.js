@@ -687,13 +687,12 @@
     const x = d.debito;
     return [
       h('div', { class: 'grid grid-cols-2 gap-2 lg:grid-cols-3' },
-        statTile('Sobró del mes pasado', x.sobrante, null, x.sobrante ? 'el «Restante» del mes anterior, cuenta como ingreso' : 'sin «Restante» registrado el mes anterior'),
-        statTile('Ingresos', x.ingresos, x.prev.ingresos, `incluye sobrante · del mes: ${fmtMoney(x.ingresosMes)}`),
+        x.sobrante == null ? statTile('Sobró del mes pasado', null, null, 'sin data') : statTile('Sobró del mes pasado', x.sobrante, null, 'el cierre del mes anterior'),
+        statTile('Ingresos', x.ingresos, x.prev.ingresos, 'incluye la categoría «Restante»'),
         statTile('Gastos', x.gastos, x.prev.gastos),
         statTile('Pagos de tarjeta', x.pagosTarjeta, x.prev.pagosTarjeta, 'salen de tu cuenta, no son gasto'),
-        statTile('Debería quedar', x.flujo, null, 'ingresos − gastos − pagos'),
-        x.cierre ? statTile('Cierre registrado', x.cierre.monto, null, `«Restante» del ${fmtD(x.cierre.fecha)} · dif. ${fmtMoney(Math.round((x.cierre.monto - x.flujo) * 100) / 100)}`)
-          : statTile('Cierre registrado', null, null, 'aún no hay «Restante» en este mes')),
+        statTile('Debería quedar', x.flujo, null, 'sobró + ingresos − gastos − pagos'),
+        statTile('Cierre registrado', x.cierre, null, 'pasa como «sobró» al mes siguiente')),
       h('h3', { class: 'mb-2 mt-5 text-sm font-semibold' }, 'Gastos por categoría'),
       rankBars(x.porCategoria, 'categoria', x.gastos),
     ];
