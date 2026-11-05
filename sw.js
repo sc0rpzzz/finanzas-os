@@ -1,5 +1,5 @@
 // Service worker: solo cachea el "app shell". Las llamadas a la API (POST a script.google.com) nunca se tocan.
-const VERSION = 'fos-v2';
+const VERSION = 'fos-v3';
 const SHELL = ['./', './index.html', './app.js', './config.js', './manifest.webmanifest',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 
@@ -29,7 +29,7 @@ self.addEventListener('fetch', (e) => {
           caches.open(VERSION).then((c) => c.put(req, copy));
           return res;
         })
-        .catch(() => caches.match(req).then((hit) => hit || caches.match('./index.html')))
+        .catch(() => caches.match(req, { ignoreSearch: true }).then((hit) => hit || caches.match('./index.html')))
     );
     return;
   }

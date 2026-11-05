@@ -171,33 +171,67 @@
       h('button', { class: BTN_GHOST + ' mt-3', onclick: retry }, 'Reintentar'));
   }
 
-  async function viewInbox(root) {
-    root.replaceChildren(loading('Cargando movimientos…'));
-    let data;
-    try { data = await api('getInbox'); } catch (e) { if (e.code !== 'UNAUTHORIZED' && e.code !== 'NO_CREDENTIALS') root.replaceChildren(failure(e, () => viewInbox(root))); return; }
-    mergeCats(data.categories);
+  const inbox = { kind: 'debito', data: null };
+  const KINDS = [['debito', 'Débito'], ['credito', 'Crédito']];
 
-    const count = h('span', { id: 'inbox-count' }, data.items.length);
-    const list = h('ul', { class: 'space-y-3' });
-    const empty = h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' },
-      h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'Todo categorizado. No hay movimientos pendientes.'));
-    const refresh = () => {
-      count.textContent = list.children.length;
-      empty.classList.toggle('hidden', list.children.length > 0);
-    };
-    data.items.forEach((it) => list.append(inboxCard(it, (li) => { li.remove(); refresh(); })));
-
-    root.replaceChildren(
-      h('div', { class: 'mb-3 flex items-center justify-between' },
-        h('h2', { class: 'text-base font-semibold' }, 'Por categorizar ', h('span', { class: 'ml-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300' }, count)),
-        h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar')),
-      data.withoutId > 0 && h('p', { class: 'mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100' },
-        `${data.withoutId} fila(s) sin ID no aparecen aquí. Ejecuta fosBackfillIds() en Apps Script.`),
-      list, empty);
-    refresh();
+  async function viewInbox(root, refetch = true) {
+    if (refetch || !inbox.data) {
+      root.replaceChildren(loading('Cargando movimientos…'));
+      const [d, c] = await Promise.allSettled([api('getInbox'), api('getCreditInbox')]);
+      if (d.status === 'rejected') {
+        if (d.reason.code !== 'UNAUTHORIZED' && d.reason.code !== 'NO_CREDENTIALS') root.replaceChildren(failure(d.reason, () => viewInbox(root)));
+        return;
+      }
+      inbox.data = { debito: d.value, credito: c.status === 'fulfilled' ? c.value : null, creditoError: c.status === 'rejected' ? c.reason : null };
+      mergeCats(d.value.categories);
+      if (c.status === 'fulfilled') mergeCats(c.value.categories);
+    }
+    renderInbox(root);
   }
 
-  function inboxCard(it, onDone) {
+  function renderInbox(root) {
+    const data = inbox.data;
+    const counts = {};
+    const refreshCounts = () => KINDS.forEach(([k]) => { counts[k].textContent = data[k] ? data[k].items.length : '–'; });
+    const tab = ([k, label]) => {
+      counts[k] = h('span', { class: 'ml-1.5 rounded-full bg-slate-800 px-2 py-0.5 text-xs text-emerald-300' });
+      const on = inbox.kind === k;
+      return h('button', {
+        type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false',
+        class: 'rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (on ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'),
+        onclick: () => { inbox.kind = k; renderInbox(root); },
+      }, label, counts[k]);
+    };
+
+    const cur = data[inbox.kind];
+    const body = h('div');
+    if (!cur) {
+      body.append(failure(data.creditoError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root)));
+    } else {
+      const list = h('ul', { class: 'space-y-3' });
+      const empty = h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' },
+        h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'Todo categorizado. No hay movimientos pendientes.'));
+      const sync = () => { empty.classList.toggle('hidden', list.children.length > 0); refreshCounts(); };
+      cur.items.forEach((it) => list.append(inboxCard(it, inbox.kind, (li) => {
+        cur.items = cur.items.filter((x) => x.id !== it.id);
+        li.remove(); sync();
+      })));
+      body.append(
+        cur.withoutId > 0 && h('p', { class: 'mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100' },
+          `${cur.withoutId} fila(s) sin ID no aparecen aquí. Ejecuta fosBackfillIds() en Apps Script.`),
+        list, empty);
+      queueMicrotask(sync);
+    }
+
+    root.replaceChildren(
+      h('div', { class: 'mb-3 flex items-center justify-between gap-2' },
+        h('div', { class: 'grid grid-cols-2 gap-1 rounded-xl bg-slate-900 p-1', role: 'tablist' }, KINDS.map(tab)),
+        h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar')),
+      body);
+    refreshCounts();
+  }
+
+  function inboxCard(it, kind, onDone) {
     const sel = h('select', { class: INPUT, 'aria-label': 'Categoría' },
       h('option', { value: '', disabled: true, selected: true }, 'Elegir categoría…'),
       state.cats.map((c) => h('option', { value: c }, c)),
@@ -214,7 +248,7 @@
         h('div', { class: 'min-w-0' },
           h('p', { class: 'truncate font-medium' }, it.detalle || '(sin detalle)'),
           it.descripcion && h('p', { class: 'truncate text-sm text-slate-400' }, it.descripcion),
-          h('p', { class: 'mt-0.5 text-xs text-slate-500' }, `${fmtDate(it.fecha)} · ${it.banco}`)),
+          h('p', { class: 'mt-0.5 text-xs text-slate-500' }, `${fmtDate(it.fecha)} · ${it.banco}`, it.cuotas ? ` · ${it.cuotas} cuotas` : '')),
         h('p', { class: 'shrink-0 font-semibold tabular-nums ' + ((it.monto || 0) < 0 ? 'text-rose-300' : 'text-emerald-300') }, fmtMoney(it.monto))),
       h('div', { class: 'mt-3 flex flex-col gap-2 sm:flex-row sm:items-start' },
         h('div', { class: 'flex-1' }, sel, newInp), btn));
@@ -224,7 +258,7 @@
       if (!validCat(categoria)) return;
       btn.disabled = true; btn.textContent = 'Guardando…';
       try {
-        const r = await api('categorize', { id: it.id, categoria, onlyIfBlank: true });
+        const r = await api('categorize', { id: it.id, categoria, onlyIfBlank: true, hoja: kind });
         mergeCats([r.categoria || categoria]);
         toast(r.updated ? `Guardado en «${categoria}»` : 'Ya tenía categoría (otro dispositivo)');
         onDone(li);
@@ -370,12 +404,44 @@
   const pct = (x) => `${(x * 100).toFixed(1)}%`;
   const TONE = { ok: 'bg-emerald-400', warn: 'bg-amber-400', bad: 'bg-rose-400' };
 
-  function cardPanel(c) {
+  const cardsUi = { open: new Map() }; // recuerda qué tarjetas tienen el detalle abierto
+
+  async function markPaid(p, box, onPaid) {
+    const li = box.closest('li');
+    box.disabled = true; li.classList.add('opacity-50', 'line-through');
+    try {
+      await api('setPagado', { id: p.id, pagado: true });
+      toast(`Pagado: ${p.detalle}`);
+      onPaid();
+    } catch (e) {
+      box.checked = false; box.disabled = false; li.classList.remove('opacity-50', 'line-through');
+      toast(errText(e), 'err');
+    }
+  }
+
+  function cardPanel(c, onPaid) {
     const tone = c.utilizacion <= c.meta ? 'ok' : c.utilizacion <= c.meta * 2 ? 'warn' : 'bad';
     const scale = Math.max(c.meta * 3, c.utilizacion);
     const row = (label, value, cls = '') => h('div', { class: 'flex items-baseline justify-between gap-3 py-1 text-sm' },
       h('span', { class: 'text-slate-400' }, label), h('span', { class: 'text-right tabular-nums ' + cls }, value));
     const urgent = c.cerrado.monto > 0 && c.cerrado.diasVence !== null && c.cerrado.diasVence <= 3;
+    const defaultOpen = c.pagarAntesCorte > 0 || c.prestamos > 0;
+    const isOpen = cardsUi.open.has(c.tarjeta) ? cardsUi.open.get(c.tarjeta) : defaultOpen;
+
+    const details = c.pendientes.length > 0 && h('details', { class: 'mt-2', open: isOpen },
+      h('summary', { class: 'cursor-pointer py-1 text-xs text-slate-400' }, `${c.pendientes.length} pendiente(s) · marca ✓ cuando los pagues`),
+      h('ul', { class: 'mt-1 space-y-1' }, c.pendientes.map((p) => {
+        const box = h('input', {
+          type: 'checkbox', class: 'h-5 w-5 shrink-0 accent-emerald-500', disabled: !p.id,
+          'aria-label': `Marcar como pagado: ${p.detalle}`,
+          title: p.id ? '' : 'Sin ID: ejecuta fosBackfillIds()',
+        });
+        box.addEventListener('change', () => { if (box.checked) markPaid(p, box, onPaid); });
+        return h('li', { class: 'flex items-center gap-3 text-xs text-slate-300' }, box,
+          h('span', { class: 'min-w-0 flex-1 truncate' }, `${fmtD(p.fecha)} · ${p.detalle} · `, h('span', { class: 'text-slate-500' }, p.tipo)),
+          h('span', { class: 'tabular-nums' }, fmtMoney(p.monto)));
+      })));
+    if (details) details.addEventListener('toggle', () => cardsUi.open.set(c.tarjeta, details.open));
 
     return h('section', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-4' },
       h('div', { class: 'flex items-baseline justify-between' },
@@ -393,18 +459,15 @@
         row(`Corte ${fmtD(c.corteProx)}`, when(c.diasCorte)),
         row('Pagar antes del corte', fmtMoney(c.pagarAntesCorte), c.pagarAntesCorte > 0 ? 'font-semibold text-amber-300' : 'text-emerald-300'),
         c.cerrado.monto > 0 && row(`Estado cerrado · vence ${fmtD(c.cerrado.vence)} (${when(c.cerrado.diasVence)})`, fmtMoney(c.cerrado.monto), urgent ? 'font-semibold text-rose-300' : ''),
-        (c.cuotaMes > 0 || c.cuotaMesPagada > 0) && row('Cuota del mes pendiente', fmtMoney(c.cuotaMes)),
-        c.cuotaMesPagada > 0 && row('Cuota del mes ya pagada', fmtMoney(c.cuotaMesPagada), 'text-emerald-300'),
+        c.cuotaMes > 0 && row('Cuota del mes (por pagar)', fmtMoney(c.cuotaMes)),
+        c.cuotaMesPagada > 0 && row('Cuotas del mes ya pagadas', fmtMoney(c.cuotaMesPagada), 'text-emerald-300'),
         c.prestamos > 0 && row('Préstamos por cobrar', fmtMoney(c.prestamos))),
-      c.pendientes.length > 0 && h('details', { class: 'mt-2' },
-        h('summary', { class: 'cursor-pointer text-xs text-slate-400' }, `Ver ${c.pendientes.length} pendiente(s)`),
-        h('ul', { class: 'mt-2 space-y-1 text-xs' }, c.pendientes.map((p) => h('li', { class: 'flex justify-between gap-3 text-slate-300' },
-          h('span', { class: 'truncate' }, `${fmtD(p.fecha)} · ${p.detalle} · `, h('span', { class: 'text-slate-500' }, p.tipo)),
-          h('span', { class: 'tabular-nums' }, fmtMoney(p.monto)))))));
+      details);
   }
 
-  async function viewCards(root) {
-    root.replaceChildren(loading('Calculando tarjetas…'));
+  async function viewCards(root, silent = false) {
+    const y = window.scrollY;
+    if (!silent) root.replaceChildren(loading('Calculando tarjetas…'));
     let d;
     try { d = await api('getCards'); } catch (e) {
       if (e.code === 'NO_TARJETAS') { root.replaceChildren(h('p', { class: 'rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100' }, 'Falta la hoja «Tarjetas». Ejecuta fosSetupTarjetas() en Apps Script.')); return; }
@@ -414,7 +477,8 @@
     root.replaceChildren(
       h('h2', { class: 'mb-1 text-base font-semibold' }, 'Tarjetas'),
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Meta: al corte, solo la cuota del mes; el resto de consumos en 0.'),
-      h('div', { class: 'space-y-3' }, d.cards.map(cardPanel)));
+      h('div', { class: 'space-y-3' }, d.cards.map((c) => cardPanel(c, () => viewCards(root, true)))));
+    if (silent) window.scrollTo(0, y);
   }
 
   /* ---------- sincronizar Yape ---------- */
