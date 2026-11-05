@@ -37,6 +37,7 @@
     card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
     calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
     refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/>',
+    chart: '<path d="M3 3v18h18"/><path d="M7 15v3M12 9v9M17 5v13"/>',
     logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
   };
   function icon(name) {
@@ -568,6 +569,100 @@
     if (silent) window.scrollTo(0, y);
   }
 
+  /* ---------- vista: Resumen (Débito y Crédito son visiones independientes: nunca se suman) ---------- */
+  const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'setiembre', 'octubre', 'noviembre', 'diciembre'];
+  const mesLabel = (ym) => `${MESES[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
+  const sumUi = { mes: null, lado: 'debito' };
+
+  function statTile(label, value, prev, note) {
+    let delta = null;
+    if (prev != null) {
+      const diff = Math.round((value - prev) * 100) / 100;
+      delta = diff === 0 ? 'igual que el mes anterior' : `${diff > 0 ? '+' : '−'}${fmtMoney(Math.abs(diff))} vs mes anterior`;
+    }
+    return h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-3' },
+      h('div', { class: 'text-xs text-slate-400' }, label),
+      h('div', { class: 'mt-1 text-xl font-semibold tabular-nums text-slate-100' }, fmtMoney(value)),
+      (delta || note) && h('div', { class: 'mt-0.5 text-xs text-slate-500' }, delta || note));
+  }
+
+  // Barras horizontales ordenadas, un solo color (parte de un total). «Sin categoría» en gris.
+  function rankBars(rows, labelKey, total) {
+    if (!rows.length) return h('p', { class: 'text-sm text-slate-500' }, 'Sin movimientos este mes.');
+    const max = Math.max(...rows.map((r) => r.monto));
+    return h('ul', { class: 'space-y-2.5' }, rows.map((r) => {
+      const gray = r[labelKey] === 'Sin categoría';
+      return h('li', {},
+        h('div', { class: 'flex items-baseline justify-between gap-3 text-sm' },
+          h('span', { class: 'truncate text-slate-200' }, r[labelKey]),
+          h('span', { class: 'shrink-0 tabular-nums text-slate-300' }, `${fmtMoney(r.monto)} · ${total ? Math.round((r.monto / total) * 100) : 0}%`)),
+        h('div', { class: 'mt-1 h-2 rounded-r bg-slate-800', role: 'presentation' },
+          h('div', { class: 'h-2 rounded-r', style: `width:${Math.max(2, (r.monto / max) * 100)}%;background:${gray ? '#64748b' : '#3987e5'}` })));
+    }));
+  }
+
+  function summaryDebito(d) {
+    const x = d.debito;
+    return [
+      h('div', { class: 'grid grid-cols-2 gap-2' },
+        statTile('Ingresos', x.ingresos, x.prev.ingresos),
+        statTile('Gastos', x.gastos, x.prev.gastos),
+        statTile('Pagos de tarjeta', x.pagosTarjeta, x.prev.pagosTarjeta, 'salen de tu cuenta, no son gasto'),
+        statTile('Flujo del mes', x.flujo, null, 'ingresos − gastos − pagos')),
+      x.saldoRegistrado && h('p', { class: 'mt-2 text-xs text-slate-500' }, `Último saldo registrado (Restante): ${fmtMoney(x.saldoRegistrado.monto)} al ${fmtD(x.saldoRegistrado.fecha)}.`),
+      h('h3', { class: 'mb-2 mt-5 text-sm font-semibold' }, 'Gastos por categoría'),
+      rankBars(x.porCategoria, 'categoria', x.gastos),
+    ];
+  }
+
+  function summaryCredito(d) {
+    const x = d.credito;
+    return [
+      h('div', { class: 'grid grid-cols-2 gap-2' },
+        statTile('Consumos', x.consumos, x.prev.consumos, `directos ${fmtMoney(x.directos)} · en cuotas ${fmtMoney(x.enCuotas)}`),
+        statTile('Pagos a tarjetas', x.pagos, x.prev.pagos),
+        x.cuotasMes != null ? statTile('Cuotas del mes', x.cuotasMes, null, 'según el calendario de cuotas') : null,
+        statTile('Préstamos', x.prestamos, x.prev.prestamos, 'por cobrar, no es consumo')),
+      h('h3', { class: 'mb-2 mt-5 text-sm font-semibold' }, 'Consumos por categoría'),
+      rankBars(x.porCategoria, 'categoria', x.consumos),
+      h('h3', { class: 'mb-2 mt-5 text-sm font-semibold' }, 'Por tarjeta'),
+      rankBars(x.porTarjeta.filter((t) => t.consumos > 0).map((t) => ({ tarjeta: t.tarjeta, monto: t.consumos })), 'tarjeta', x.consumos),
+    ];
+  }
+
+  async function viewSummary(root) {
+    root.replaceChildren(loading('Calculando resumen…'));
+    let d;
+    try { d = await api('getSummary', sumUi.mes ? { mes: sumUi.mes } : {}); } catch (e) {
+      if (e.code !== 'UNAUTHORIZED') root.replaceChildren(failure(e, () => viewSummary(root)));
+      return;
+    }
+    sumUi.mes = d.esActual ? null : d.mes;
+    const go = (mes) => { sumUi.mes = mes; viewSummary(root); };
+    const navBtn = (txt, label, mes) => h('button', { type: 'button', 'aria-label': label, disabled: !mes, onclick: () => go(mes), class: 'rounded-lg border border-slate-700 px-3 py-1.5 text-slate-200 hover:bg-slate-800 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400' }, txt);
+    const tab = (key, txt) => h('button', {
+      type: 'button', role: 'tab', 'aria-selected': sumUi.lado === key ? 'true' : 'false',
+      onclick: () => { sumUi.lado = key; viewSummary(root); },
+      class: 'flex-1 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' +
+        (sumUi.lado === key ? 'bg-slate-700 text-slate-50' : 'text-slate-400 hover:text-slate-200'),
+    }, txt);
+    const c = d.cuadre;
+    const cuadra = c.diferencia === 0;
+    root.replaceChildren(
+      h('div', { class: 'mb-3 flex items-center justify-between gap-2' },
+        navBtn('◀', 'Mes anterior', d.prevMes),
+        h('h2', { class: 'text-base font-semibold capitalize', 'data-testid': 'mes' }, mesLabel(d.mes)),
+        navBtn('▶', 'Mes siguiente', d.nextMes)),
+      h('div', { role: 'tablist', class: 'mb-4 flex gap-1 rounded-xl border border-slate-800 bg-slate-900 p-1' }, tab('debito', 'Débito'), tab('credito', 'Crédito')),
+      ...(sumUi.lado === 'debito' ? summaryDebito(d) : summaryCredito(d)).filter(Boolean),
+      h('p', {
+        class: 'mt-6 rounded-lg border px-3 py-2 text-xs ' + (cuadra ? 'border-slate-800 text-slate-500' : 'border-amber-500/40 bg-amber-500/10 text-amber-100'),
+      }, cuadra
+        ? `Partida doble: ✓ pagos de tarjeta cuadran (Débito ${fmtMoney(c.debito)} = Crédito ${fmtMoney(c.credito)}).`
+        : `Partida doble: ⚠ no cuadra. Débito registra ${fmtMoney(c.debito)} en pagos de tarjeta y Crédito ${fmtMoney(c.credito)} (dif. ${fmtMoney(c.diferencia)}). Revisa si falta un pago en alguna hoja o la categoría «Pago Tarjeta».`),
+      h('p', { class: 'mt-2 text-xs text-slate-600' }, 'Débito y Crédito son visiones independientes: no se suman.'));
+  }
+
   /* ---------- sincronizar Yape ---------- */
   async function syncYape() {
     if (!confirm('¿Ya enviaste el correo de Yape desde la app?')) return;
@@ -586,7 +681,7 @@
   }
 
   /* ---------- router ---------- */
-  const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: viewManual, calendario: viewCalendar };
+  const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: viewManual, calendario: viewCalendar, resumen: viewSummary };
   const currentView = () => { const v = location.hash.slice(1); return VIEWS[v] ? v : 'inbox'; };
   function route() {
     if (!hasCreds()) { openSetup(); return; }

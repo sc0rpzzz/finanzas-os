@@ -23,7 +23,7 @@
     .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spin { animation: none; } * { transition: none !important; } }
   </style>
-  <script src="config.js?v=4"></script>
+  <script src="config.js?v=5"></script>
 </head>
 <body class="min-h-screen font-sans antialiased">
   <header class="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/90 backdrop-blur safe-t">
@@ -45,11 +45,12 @@
   <main id="view" class="mx-auto max-w-3xl px-4 pb-28 pt-4" aria-live="polite"></main>
 
   <nav class="fixed inset-x-0 bottom-0 z-20 border-t border-slate-800 bg-slate-950/95 backdrop-blur safe-b" aria-label="Secciones">
-    <div class="mx-auto grid max-w-3xl grid-cols-4">
+    <div class="mx-auto grid max-w-3xl grid-cols-5">
       <a href="#inbox" data-nav="inbox" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="inbox"></span>Inbox</a>
       <a href="#tarjetas" data-nav="tarjetas" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="card"></span>Tarjetas</a>
       <a href="#nuevo" data-nav="nuevo" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="plus"></span>Nuevo</a>
       <a href="#calendario" data-nav="calendario" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="calendar"></span>Cuotas</a>
+      <a href="#resumen" data-nav="resumen" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="chart"></span>Resumen</a>
     </div>
   </nav>
 
@@ -78,6 +79,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=4" defer></script>
+  <script src="app.js?v=5" defer></script>
 </body>
 </html>
