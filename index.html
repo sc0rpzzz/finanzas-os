@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#020617">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Finanzas OS</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <!-- Tailwind Play CDN: ideal para arrancar sin build. Más adelante se puede compilar con la CLI. -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: { sans: ['ui-sans-serif', 'system-ui', 'Segoe UI', 'Roboto', 'sans-serif'] } } } };
+  </script>
+  <style>
+    body { background: #020617; color: #e2e8f0; -webkit-tap-highlight-color: transparent; }
+    .safe-b { padding-bottom: max(env(safe-area-inset-bottom), 0.5rem); }
+    .safe-t { padding-top: env(safe-area-inset-top); }
+    dialog::backdrop { background: rgb(2 6 23 / .8); }
+    .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spin { animation: none; } * { transition: none !important; } }
+  </style>
+  <script src="config.js"></script>
+</head>
+<body class="min-h-screen font-sans antialiased">
+  <header class="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/90 backdrop-blur safe-t">
+    <div class="mx-auto flex max-w-3xl items-center justify-between gap-2 px-4 py-3">
+      <h1 class="text-lg font-semibold tracking-tight">Finanzas <span class="text-emerald-400">OS</span></h1>
+      <div class="flex items-center gap-2">
+        <button id="btn-yape" type="button"
+          class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:opacity-50">
+          <span data-icon="refresh"></span> Sincronizar Yape
+        </button>
+        <button id="btn-logout" type="button" aria-label="Cerrar sesión"
+          class="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400">
+          <span data-icon="logout"></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="view" class="mx-auto max-w-3xl px-4 pb-28 pt-4" aria-live="polite"></main>
+
+  <nav class="fixed inset-x-0 bottom-0 z-20 border-t border-slate-800 bg-slate-950/95 backdrop-blur safe-b" aria-label="Secciones">
+    <div class="mx-auto grid max-w-3xl grid-cols-3">
+      <a href="#inbox" data-nav="inbox" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="inbox"></span>Inbox</a>
+      <a href="#nuevo" data-nav="nuevo" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="plus"></span>Nuevo gasto</a>
+      <a href="#calendario" data-nav="calendario" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="calendar"></span>Cuotas</a>
+    </div>
+  </nav>
+
+  <div id="toast" role="status" aria-live="polite"
+    class="pointer-events-none fixed inset-x-4 bottom-24 z-50 mx-auto hidden max-w-sm rounded-xl border px-4 py-3 text-sm shadow-lg"></div>
+
+  <dialog id="setup" class="w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-0 text-slate-100">
+    <form id="setup-form" class="space-y-4 p-6" autocomplete="off">
+      <div>
+        <h2 class="text-lg font-semibold">Conectar con tu API</h2>
+        <p class="mt-1 text-sm text-slate-400">Se guardan solo en este dispositivo (localStorage).</p>
+      </div>
+      <label class="block text-sm">URL de la Web App
+        <input id="setup-url" type="url" required inputmode="url" placeholder="https://script.google.com/macros/s/…/exec"
+          class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-400">
+      </label>
+      <label class="block text-sm">Token de seguridad
+        <input id="setup-token" type="password" required minlength="24" autocomplete="off" autocapitalize="off" spellcheck="false"
+          class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-400">
+      </label>
+      <p id="setup-error" class="hidden rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200"></p>
+      <button id="setup-submit" type="submit"
+        class="w-full rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 disabled:opacity-50">
+        Verificar y guardar
+      </button>
+    </form>
+  </dialog>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
