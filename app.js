@@ -298,29 +298,70 @@
 
     const cur = norm(d.currentMonth);
     const curIdx = d.currentIndex != null ? d.currentIndex : d.months.findIndex((m) => norm(m) === cur);
-    const totals = d.months.map((_, i) => d.rows.reduce((s, r) => s + (r.montos[i] || 0), 0));
     const cell = 'px-3 py-2 text-right tabular-nums whitespace-nowrap';
-    const hi = (i) => (i === curIdx ? ' bg-emerald-500/10 border-x border-emerald-500/40 text-emerald-200 font-medium' : '');
+    const hi = (i) => (i === curIdx ? ' bg-emerald-500/10 border-x border-emerald-500/40' : '');
+    const summary = h('p', { class: 'mb-3 text-sm text-slate-400' });
+    const wrap = h('div', { class: 'overflow-x-auto rounded-xl border border-slate-800 bg-slate-900', 'aria-label': 'Calendario de cuotas' });
+    let firstDraw = true;
 
-    const thead = h('tr', {},
-      h('th', { class: 'sticky left-0 z-10 min-w-[10rem] bg-slate-900 px-3 py-2 text-left font-medium text-slate-300' }, 'Compra'),
-      d.months.map((m, i) => h('th', { class: 'px-3 py-2 text-right font-medium capitalize text-slate-400' + (i === curIdx ? ' bg-emerald-500 !text-slate-950' : ''), 'data-current': i === curIdx ? '1' : null }, m)));
-    const body = d.rows.map((r) => h('tr', { class: 'border-t border-slate-800' },
-      h('td', { class: 'sticky left-0 z-10 bg-slate-900 px-3 py-2' }, h('div', { class: 'font-medium' }, r.compra), h('div', { class: 'text-xs text-slate-500' }, r.tarjeta)),
-      r.montos.map((v, i) => h('td', { class: cell + (v == null ? ' text-slate-700' : ' text-rose-300') + hi(i) }, v == null ? '·' : fmtMoney(v)))));
-    const foot = h('tr', { class: 'border-t-2 border-slate-700 font-semibold' },
-      h('td', { class: 'sticky left-0 z-10 bg-slate-900 px-3 py-2' }, 'Total del mes'),
-      totals.map((v, i) => h('td', { class: cell + hi(i) }, v ? fmtMoney(v) : '·')));
+    function draw() {
+      const keep = wrap.scrollLeft;
+      const totals = d.months.map((_, i) => d.rows.reduce((s, r) => s + (r.montos[i] || 0), 0));
+      const pending = d.months.map((_, i) => d.rows.reduce((s, r) => s + (r.montos[i] && !r.pagadas[i] ? r.montos[i] : 0), 0));
+      const thead = h('tr', {},
+        h('th', { class: 'sticky left-0 z-10 min-w-[10rem] bg-slate-900 px-3 py-2 text-left font-medium text-slate-300' }, 'Compra'),
+        d.months.map((m, i) => h('th', { class: 'px-3 py-2 text-right font-medium capitalize text-slate-400' + (i === curIdx ? ' bg-emerald-500 !text-slate-950' : ''), 'data-current': i === curIdx ? '1' : null }, m)));
+      const body = d.rows.map((r) => h('tr', { class: 'border-t border-slate-800' },
+        h('td', { class: 'sticky left-0 z-10 bg-slate-900 px-3 py-2' }, h('div', { class: 'font-medium' }, r.compra), h('div', { class: 'text-xs text-slate-500' }, r.tarjeta)),
+        r.montos.map((v, i) => {
+          if (v == null) return h('td', { class: cell + ' text-slate-700' + hi(i) }, '·');
+          const paid = !!r.pagadas[i];
+          return h('td', { class: 'p-0' + hi(i) },
+            h('button', {
+              type: 'button', 'aria-pressed': paid ? 'true' : 'false',
+              'aria-label': `${r.compra}, ${d.months[i]}: ${paid ? 'pagada, desmarcar' : 'marcar como pagada'}`,
+              class: 'block w-full ' + cell + ' focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' +
+                (paid ? 'text-emerald-300/70 line-through' : 'text-rose-300 hover:bg-slate-800'),
+              onclick: () => toggle(r, i),
+            }, (paid ? '✓ ' : '') + fmtMoney(v)));
+        })));
+      const foot = [
+        h('tr', { class: 'border-t-2 border-slate-700 text-slate-400' },
+          h('td', { class: 'sticky left-0 z-10 bg-slate-900 px-3 py-2' }, 'Total del mes'),
+          totals.map((v, i) => h('td', { class: cell + hi(i) }, v ? fmtMoney(v) : '·'))),
+        h('tr', { class: 'font-semibold' },
+          h('td', { class: 'sticky left-0 z-10 bg-slate-900 px-3 py-2' }, 'Por pagar'),
+          pending.map((v, i) => h('td', { class: cell + hi(i) + (v ? '' : ' text-emerald-300') }, v ? fmtMoney(v) : '✓'))),
+      ];
+      wrap.replaceChildren(h('table', { class: 'w-full text-sm' }, h('thead', {}, thead), h('tbody', {}, body), h('tfoot', {}, foot)));
+      wrap.scrollLeft = keep;
+      if (firstDraw) {
+        firstDraw = false;
+        const th = wrap.querySelector('th[data-current]');
+        if (th) requestAnimationFrame(() => { wrap.scrollLeft = Math.max(0, th.offsetLeft - 170); });
+      }
+      if (curIdx >= 0) summary.replaceChildren(`Este mes (${d.months[curIdx]}): total `, h('span', { class: 'font-semibold text-slate-200' }, fmtMoney(totals[curIdx])), ' · por pagar ', h('span', { class: 'font-semibold text-emerald-300' }, fmtMoney(pending[curIdx])));
+    }
 
-    const wrap = h('div', { class: 'overflow-x-auto rounded-xl border border-slate-800 bg-slate-900', tabindex: '0', 'aria-label': 'Calendario de cuotas' },
-      h('table', { class: 'w-full text-sm' }, h('thead', {}, thead), h('tbody', {}, body), h('tfoot', {}, foot)));
+    async function toggle(r, i) {
+      if (!r.id) { toast('Esta compra no tiene ID. Ejecuta fosBackfillIds() en Apps Script.', 'err'); return; }
+      const next = !r.pagadas[i];
+      r.pagadas[i] = next; draw();                      // optimista
+      try {
+        await api('toggleCuota', { id: r.id, mes: d.keys[i], pagada: next });
+      } catch (e) {
+        r.pagadas[i] = !next; draw();                   // se revierte si falla
+        toast(errText(e), 'err');
+      }
+    }
 
+    draw();
     root.replaceChildren(
       h('h2', { class: 'mb-1 text-base font-semibold' }, 'Calendario de cuotas'),
-      curIdx >= 0 && h('p', { class: 'mb-3 text-sm text-slate-400' }, `Este mes (${d.months[curIdx]}): `, h('span', { class: 'font-semibold text-emerald-300' }, fmtMoney(totals[curIdx]))),
+      summary,
+      h('p', { class: 'mb-2 text-xs text-slate-500' }, 'Toca una cuota para marcarla como pagada.'),
       wrap);
-    const th = wrap.querySelector('th[data-current]');
-    if (th) requestAnimationFrame(() => { wrap.scrollLeft = Math.max(0, th.offsetLeft - 170); });
+    draw();
   }
 
   /* ---------- vista: Tarjetas ---------- */
@@ -352,7 +393,8 @@
         row(`Corte ${fmtD(c.corteProx)}`, when(c.diasCorte)),
         row('Pagar antes del corte', fmtMoney(c.pagarAntesCorte), c.pagarAntesCorte > 0 ? 'font-semibold text-amber-300' : 'text-emerald-300'),
         c.cerrado.monto > 0 && row(`Estado cerrado · vence ${fmtD(c.cerrado.vence)} (${when(c.cerrado.diasVence)})`, fmtMoney(c.cerrado.monto), urgent ? 'font-semibold text-rose-300' : ''),
-        c.cuotaMes > 0 && row('Cuota del mes', fmtMoney(c.cuotaMes)),
+        (c.cuotaMes > 0 || c.cuotaMesPagada > 0) && row('Cuota del mes pendiente', fmtMoney(c.cuotaMes)),
+        c.cuotaMesPagada > 0 && row('Cuota del mes ya pagada', fmtMoney(c.cuotaMesPagada), 'text-emerald-300'),
         c.prestamos > 0 && row('Préstamos por cobrar', fmtMoney(c.prestamos))),
       c.pendientes.length > 0 && h('details', { class: 'mt-2' },
         h('summary', { class: 'cursor-pointer text-xs text-slate-400' }, `Ver ${c.pendientes.length} pendiente(s)`),
