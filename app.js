@@ -37,6 +37,7 @@
     card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
     calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
     refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/>',
+    table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16"/>',
     chart: '<path d="M3 3v18h18"/><path d="M7 15v3M12 9v9M17 5v13"/>',
     logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
   };
@@ -209,7 +210,7 @@
     if (!cur) {
       body.append(failure(data.creditoError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root)));
     } else {
-      const list = h('ul', { class: 'space-y-3' });
+      const list = h('ul', { class: 'grid gap-3 lg:grid-cols-2' });
       const empty = h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' },
         h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'Todo categorizado. No hay movimientos pendientes.'));
       const sync = () => { empty.classList.toggle('hidden', list.children.length > 0); refreshCounts(); };
@@ -217,10 +218,10 @@
         cur.items = cur.items.filter((x) => x.id !== it.id);
         li.remove(); sync();
       })));
-      body.append(
+      body.append(...[
         cur.withoutId > 0 && h('p', { class: 'mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100' },
           `${cur.withoutId} fila(s) sin ID no aparecen aquí. Ejecuta fosBackfillIds() en Apps Script.`),
-        list, empty);
+        list, empty].filter(Boolean));
       queueMicrotask(sync);
     }
 
@@ -406,7 +407,88 @@
     } else {
       body = manual.mode === 'consumo' ? formConsumo(opts) : manual.mode === 'pago' ? formPago(opts) : formEfectivo();
     }
-    root.replaceChildren(h('h2', { class: 'mb-3 text-base font-semibold' }, 'Nuevo movimiento'), tabs, body);
+    root.replaceChildren(h('a', { href: '#movimientos', class: 'mb-2 inline-block text-sm text-slate-400 hover:text-slate-200' }, '← Movimientos'), h('h2', { class: 'mb-3 text-base font-semibold' }, 'Nuevo movimiento'), tabs, body);
+  }
+
+  /* ---------- vista: Movimientos (la hoja completa, solo lectura, para contrastar con el estado de cuenta) ---------- */
+  const histUi = { hoja: 'debito', data: {}, q: '', mes: '', cuenta: '', limit: 200 };
+  const HIST_NAMES = { debito: 'Débito', credito: 'Crédito' };
+  const fmtFull = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(iso || ''); return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}` : (iso || ''); };
+
+  async function viewHistory(root, refetch = false) {
+    const k = histUi.hoja;
+    if (refetch || !histUi.data[k]) {
+      root.replaceChildren(loading('Cargando movimientos…'));
+      try { histUi.data[k] = await api('getHistory', { hoja: k }); } catch (e) {
+        if (e.code !== 'UNAUTHORIZED' && e.code !== 'NO_CREDENTIALS') root.replaceChildren(failure(e, () => viewHistory(root, true)));
+        return;
+      }
+    }
+    renderHistory(root);
+  }
+
+  function renderHistory(root) {
+    const d = histUi.data[histUi.hoja];
+    const col = (name) => d.columns.findIndex((c) => norm(c) === norm(name));
+    const iF = col('Fecha'), iM = col('Monto'), iB = col('Banco / Cuenta'), iT = col('Tipo');
+    const months = [...new Set(d.rows.map((r) => (r[iF] || '').slice(0, 7)).filter(Boolean))];
+    const cuentas = iB >= 0 ? [...new Set(d.rows.map((r) => r[iB]).filter(Boolean))].sort() : [];
+    if (histUi.mes && !months.includes(histUi.mes)) histUi.mes = '';
+    if (histUi.cuenta && !cuentas.includes(histUi.cuenta)) histUi.cuenta = '';
+
+    const tab = (key) => h('button', {
+      type: 'button', role: 'tab', 'aria-selected': histUi.hoja === key ? 'true' : 'false',
+      onclick: () => { histUi.hoja = key; histUi.limit = 200; viewHistory(root); },
+      class: 'rounded-lg px-4 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (histUi.hoja === key ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'),
+    }, HIST_NAMES[key]);
+    const q = h('input', { type: 'search', class: INPUT + ' sm:max-w-xs', placeholder: 'Buscar comercio, monto, ID…', value: histUi.q, 'aria-label': 'Buscar' });
+    const selMes = h('select', { class: INPUT + ' sm:w-auto', 'aria-label': 'Mes' }, h('option', { value: '' }, 'Todos los meses'),
+      months.map((m) => h('option', { value: m, selected: m === histUi.mes }, mesLabel(m))));
+    const selCta = h('select', { class: INPUT + ' sm:w-auto', 'aria-label': 'Cuenta' }, h('option', { value: '' }, histUi.hoja === 'credito' ? 'Todas las tarjetas' : 'Todas las cuentas'),
+      cuentas.map((c) => h('option', { value: c, selected: c === histUi.cuenta }, c)));
+    const info = h('p', { class: 'my-2 text-sm text-slate-400', 'aria-live': 'polite' });
+    const wrap = h('div', { class: 'max-h-[65vh] overflow-auto rounded-xl border border-slate-800 bg-slate-900' });
+    const more = h('button', { type: 'button', class: BTN_GHOST + ' mt-3 hidden', onclick: () => { histUi.limit += 200; draw(); } }, 'Mostrar más');
+
+    const cell = (v, i) => {
+      const name = norm(d.columns[i]);
+      const td = (cls, txt) => h('td', { class: 'whitespace-nowrap px-3 py-2 ' + cls }, txt);
+      if (v === null || v === '') return td('text-slate-700', '·');
+      if (i === iF) return td('tabular-nums text-slate-300', fmtFull(v));
+      if (typeof v === 'number') return td('text-right tabular-nums ' + (i === iM ? (v < 0 ? 'text-rose-300' : 'text-emerald-300') : 'text-slate-300'), i === iM || name.includes('monto') ? fmtMoney(v) : String(v));
+      if (typeof v === 'boolean') return td('text-center ' + (v ? 'text-emerald-300' : 'text-slate-600'), v ? '✓' : '·');
+      if (name === 'id') return td('text-xs text-slate-500', v);
+      return td('text-slate-200', v);
+    };
+
+    function draw() {
+      const needle = norm(histUi.q);
+      const rows = d.rows.filter((r) =>
+        (!histUi.mes || (r[iF] || '').startsWith(histUi.mes)) && (!histUi.cuenta || r[iB] === histUi.cuenta) &&
+        (!needle || norm(r.map((v) => (v == null ? '' : v)).join(' ')).includes(needle)));
+      const shown = rows.slice(0, histUi.limit);
+      const sum = (f) => Math.round(rows.reduce((s, r) => s + (typeof r[iM] === 'number' && f(r[iM]) ? r[iM] : 0), 0) * 100) / 100;
+      info.replaceChildren(...[`${rows.length} fila(s)`, iM >= 0 ? [' · entradas ', h('b', { class: 'text-emerald-300' }, fmtMoney(sum((v) => v > 0))), ' · salidas ', h('b', { class: 'text-rose-300' }, fmtMoney(sum((v) => v < 0))), ' · neto ', h('b', { class: 'text-slate-200' }, fmtMoney(sum(() => true)))] : '',
+        d.truncated ? ` · (la hoja tiene ${d.total}, se cargan las ${d.rows.length} más recientes)` : ''].flat());
+      wrap.replaceChildren(rows.length ? h('table', { class: 'w-full text-sm' },
+        h('thead', {}, h('tr', {}, d.columns.map((c, i) => h('th', { class: 'sticky top-0 z-10 whitespace-nowrap bg-slate-800 px-3 py-2 font-medium text-slate-300 ' + (i === iM ? 'text-right' : 'text-left') }, c)))),
+        h('tbody', {}, shown.map((r) => h('tr', { class: 'border-t border-slate-800 hover:bg-slate-800/60' }, r.map(cell)))))
+        : h('p', { class: 'p-8 text-center text-sm text-slate-500' }, 'Sin resultados.'));
+      more.classList.toggle('hidden', rows.length <= shown.length);
+    }
+    q.addEventListener('input', () => { histUi.q = q.value; histUi.limit = 200; draw(); });
+    selMes.addEventListener('change', () => { histUi.mes = selMes.value; histUi.limit = 200; draw(); });
+    selCta.addEventListener('change', () => { histUi.cuenta = selCta.value; histUi.limit = 200; draw(); });
+
+    root.replaceChildren(
+      h('div', { class: 'mb-3 flex flex-wrap items-center justify-between gap-2' },
+        h('div', { role: 'tablist', class: 'flex gap-1 rounded-xl bg-slate-900 p-1' }, tab('debito'), tab('credito')),
+        h('div', { class: 'flex gap-2' },
+          h('button', { type: 'button', class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewHistory(root, true) }, 'Actualizar'),
+          h('a', { href: '#nuevo', class: BTN + ' !px-3 !py-1.5' }, '+ Nuevo'))),
+      h('div', { class: 'flex flex-col gap-2 sm:flex-row' }, q, selMes, selCta),
+      info, wrap, more);
+    draw();
   }
 
   /* ---------- vista: Calendario de cuotas ---------- */
@@ -565,7 +647,7 @@
     root.replaceChildren(
       h('h2', { class: 'mb-1 text-base font-semibold' }, 'Tarjetas'),
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Meta: al corte, solo la cuota del mes; el resto de consumos en 0.'),
-      h('div', { class: 'space-y-3' }, d.cards.map((c) => cardPanel(c, () => viewCards(root, true)))));
+      h('div', { class: 'grid gap-3 lg:grid-cols-2 lg:items-start' }, d.cards.map((c) => cardPanel(c, () => viewCards(root, true)))));
     if (silent) window.scrollTo(0, y);
   }
 
@@ -576,13 +658,13 @@
 
   function statTile(label, value, prev, note) {
     let delta = null;
-    if (prev != null) {
+    if (prev != null && value != null) {
       const diff = Math.round((value - prev) * 100) / 100;
       delta = diff === 0 ? 'igual que el mes anterior' : `${diff > 0 ? '+' : '−'}${fmtMoney(Math.abs(diff))} vs mes anterior`;
     }
     return h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-3' },
       h('div', { class: 'text-xs text-slate-400' }, label),
-      h('div', { class: 'mt-1 text-xl font-semibold tabular-nums text-slate-100' }, fmtMoney(value)),
+      h('div', { class: 'mt-1 text-xl font-semibold tabular-nums text-slate-100' }, value == null ? '—' : fmtMoney(value)),
       (delta || note) && h('div', { class: 'mt-0.5 text-xs text-slate-500' }, delta || note));
   }
 
@@ -604,12 +686,14 @@
   function summaryDebito(d) {
     const x = d.debito;
     return [
-      h('div', { class: 'grid grid-cols-2 gap-2' },
-        statTile('Ingresos', x.ingresos, x.prev.ingresos),
+      h('div', { class: 'grid grid-cols-2 gap-2 lg:grid-cols-3' },
+        statTile('Sobró del mes pasado', x.sobrante, null, x.sobrante ? 'el «Restante» del mes anterior, cuenta como ingreso' : 'sin «Restante» registrado el mes anterior'),
+        statTile('Ingresos', x.ingresos, x.prev.ingresos, `incluye sobrante · del mes: ${fmtMoney(x.ingresosMes)}`),
         statTile('Gastos', x.gastos, x.prev.gastos),
         statTile('Pagos de tarjeta', x.pagosTarjeta, x.prev.pagosTarjeta, 'salen de tu cuenta, no son gasto'),
-        statTile('Flujo del mes', x.flujo, null, 'ingresos − gastos − pagos')),
-      x.saldoRegistrado && h('p', { class: 'mt-2 text-xs text-slate-500' }, `Último saldo registrado (Restante): ${fmtMoney(x.saldoRegistrado.monto)} al ${fmtD(x.saldoRegistrado.fecha)}.`),
+        statTile('Debería quedar', x.flujo, null, 'ingresos − gastos − pagos'),
+        x.cierre ? statTile('Cierre registrado', x.cierre.monto, null, `«Restante» del ${fmtD(x.cierre.fecha)} · dif. ${fmtMoney(Math.round((x.cierre.monto - x.flujo) * 100) / 100)}`)
+          : statTile('Cierre registrado', null, null, 'aún no hay «Restante» en este mes')),
       h('h3', { class: 'mb-2 mt-5 text-sm font-semibold' }, 'Gastos por categoría'),
       rankBars(x.porCategoria, 'categoria', x.gastos),
     ];
@@ -618,7 +702,7 @@
   function summaryCredito(d) {
     const x = d.credito;
     return [
-      h('div', { class: 'grid grid-cols-2 gap-2' },
+      h('div', { class: 'grid grid-cols-2 gap-2 lg:grid-cols-4' },
         statTile('Consumos', x.consumos, x.prev.consumos, `directos ${fmtMoney(x.directos)} · en cuotas ${fmtMoney(x.enCuotas)}`),
         statTile('Pagos a tarjetas', x.pagos, x.prev.pagos),
         x.cuotasMes != null ? statTile('Cuotas del mes', x.cuotasMes, null, 'según el calendario de cuotas') : null,
@@ -681,13 +765,13 @@
   }
 
   /* ---------- router ---------- */
-  const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: viewManual, calendario: viewCalendar, resumen: viewSummary };
+  const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: viewManual, calendario: viewCalendar, resumen: viewSummary, movimientos: viewHistory };
   const currentView = () => { const v = location.hash.slice(1); return VIEWS[v] ? v : 'inbox'; };
   function route() {
     if (!hasCreds()) { openSetup(); return; }
     const v = currentView();
     document.querySelectorAll('[data-nav]').forEach((a) => {
-      const on = a.dataset.nav === v;
+      const on = a.dataset.nav === (v === 'nuevo' ? 'movimientos' : v);
       a.classList.toggle('text-emerald-400', on); a.classList.toggle('text-slate-400', !on);
       on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
     });

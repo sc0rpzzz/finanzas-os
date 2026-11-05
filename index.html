@@ -23,13 +23,13 @@
     .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spin { animation: none; } * { transition: none !important; } }
   </style>
-  <script src="config.js?v=5"></script>
+  <script src="config.js?v=6"></script>
 </head>
 <body class="min-h-screen font-sans antialiased">
-  <header class="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/90 backdrop-blur safe-t">
-    <div class="mx-auto flex max-w-3xl items-center justify-between gap-2 px-4 py-3">
-      <h1 class="text-lg font-semibold tracking-tight">Finanzas <span class="text-emerald-400">OS</span></h1>
-      <div class="flex items-center gap-2">
+  <header class="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/90 backdrop-blur safe-t md:pl-56">
+    <div class="mx-auto flex max-w-3xl items-center justify-between gap-2 px-4 py-3 md:max-w-6xl md:px-8">
+      <h1 class="text-lg font-semibold tracking-tight md:hidden">Finanzas <span class="text-emerald-400">OS</span></h1>
+      <div class="flex items-center gap-2 md:ml-auto">
         <button id="btn-yape" type="button"
           class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:opacity-50">
           <span data-icon="refresh"></span> Sincronizar Yape
@@ -42,15 +42,16 @@
     </div>
   </header>
 
-  <main id="view" class="mx-auto max-w-3xl px-4 pb-28 pt-4" aria-live="polite"></main>
+  <div class="md:pl-56"><main id="view" class="mx-auto max-w-3xl px-4 pb-28 pt-4 md:max-w-6xl md:px-8 md:pb-10" aria-live="polite"></main></div>
 
-  <nav class="fixed inset-x-0 bottom-0 z-20 border-t border-slate-800 bg-slate-950/95 backdrop-blur safe-b" aria-label="Secciones">
-    <div class="mx-auto grid max-w-3xl grid-cols-5">
-      <a href="#inbox" data-nav="inbox" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="inbox"></span>Inbox</a>
-      <a href="#tarjetas" data-nav="tarjetas" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="card"></span>Tarjetas</a>
-      <a href="#nuevo" data-nav="nuevo" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="plus"></span>Nuevo</a>
-      <a href="#calendario" data-nav="calendario" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="calendar"></span>Cuotas</a>
-      <a href="#resumen" data-nav="resumen" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400"><span data-icon="chart"></span>Resumen</a>
+  <nav class="fixed inset-x-0 bottom-0 z-30 border-t border-slate-800 bg-slate-950/95 backdrop-blur safe-b md:inset-y-0 md:right-auto md:w-56 md:border-r md:border-t-0 md:pb-0" aria-label="Secciones">
+    <div class="hidden px-6 py-4 text-lg font-semibold tracking-tight md:block">Finanzas <span class="text-emerald-400">OS</span></div>
+    <div class="mx-auto grid max-w-3xl grid-cols-5 md:flex md:max-w-none md:flex-col md:gap-1 md:px-3">
+      <a href="#inbox" data-nav="inbox" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400 md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="inbox"></span>Inbox</a>
+      <a href="#tarjetas" data-nav="tarjetas" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400 md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="card"></span>Tarjetas</a>
+      <a href="#movimientos" data-nav="movimientos" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400 md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="table"></span>Movimientos</a>
+      <a href="#calendario" data-nav="calendario" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400 md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="calendar"></span>Cuotas</a>
+      <a href="#resumen" data-nav="resumen" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400 md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="chart"></span>Resumen</a>
     </div>
   </nav>
 
@@ -79,6 +80,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=5" defer></script>
+  <script src="app.js?v=6" defer></script>
 </body>
 </html>
