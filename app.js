@@ -173,28 +173,111 @@
       h('button', { class: BTN_GHOST + ' mt-3', onclick: retry }, 'Reintentar'));
   }
 
-  const inbox = { kind: 'debito', data: null };
+  const inbox = { kind: 'debito', phase: 1, data: null };
   const KINDS = [['debito', 'Débito'], ['credito', 'Crédito']];
 
   async function viewInbox(root, refetch = true) {
     if (refetch || !inbox.data) {
       root.replaceChildren(loading('Cargando movimientos…'));
-      const [d, c] = await Promise.allSettled([api('getInbox'), api('getCreditInbox')]);
+      const [d, c, cards, cal] = await Promise.allSettled([api('getInbox'), api('getCreditInbox'), api('getCards'), api('getCalendar')]);
       if (d.status === 'rejected') {
         if (d.reason.code !== 'UNAUTHORIZED' && d.reason.code !== 'NO_CREDENTIALS') root.replaceChildren(failure(d.reason, () => viewInbox(root)));
         return;
       }
-      inbox.data = { debito: d.value, credito: c.status === 'fulfilled' ? c.value : null, creditoError: c.status === 'rejected' ? c.reason : null };
+      inbox.data = {
+        debito: d.value, credito: c.status === 'fulfilled' ? c.value : null, creditoError: c.status === 'rejected' ? c.reason : null,
+        cards: cards.status === 'fulfilled' ? cards.value : null, cardsError: cards.status === 'rejected' ? cards.reason : null,
+        cal: cal.status === 'fulfilled' ? cal.value : null, calError: cal.status === 'rejected' ? cal.reason : null,
+      };
       mergeCats(d.value.categories);
       if (c.status === 'fulfilled') mergeCats(c.value.categories);
     }
     renderInbox(root);
   }
 
+  const unpaidList = (data) => (data.cards ? (data.cards.cards || []).flatMap((c) => c.pendientes.map((p) => Object.assign({ tarjeta: c.tarjeta }, p))) : []);
+  const dueFees = (data) => (data.cal ? (data.cal.rows || []).filter((r) => r.montos[0] != null && !r.pagadas[0]) : []);
+
+  function phaseBar(root, badge1) {
+    const data = inbox.data;
+    const n1 = (data.debito ? data.debito.items.length : 0) + (data.credito ? data.credito.items.length : 0);
+    const defs = [[1, 'Categorizar', n1], [2, 'Créditos por pagar', data.cards ? unpaidList(data).length : '–'], [3, 'Cuotas del mes', data.cal ? dueFees(data).length : '–']];
+    return h('div', { class: 'mb-4 grid grid-cols-3 gap-1 rounded-xl border border-slate-800 bg-slate-900 p-1', role: 'tablist', 'aria-label': 'Fases de revisión' },
+      defs.map(([n, label, c]) => {
+        const on = inbox.phase === n;
+        const b = h('span', { class: 'ml-1.5 rounded-full px-2 py-0.5 text-xs ' + (c === 0 ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-amber-300') }, c === 0 ? '✓' : c);
+        if (n === 1 && badge1) badge1.el = b;
+        return h('button', {
+          type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false',
+          onclick: () => { inbox.phase = n; renderInbox(root); },
+          class: 'rounded-lg px-2 py-2 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 sm:text-sm ' + (on ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'),
+        }, h('span', { class: 'text-slate-500' }, `${n}. `), label, b);
+      }));
+  }
+
+  function phasePay(root) {
+    const data = inbox.data;
+    if (!data.cards) return failure(data.cardsError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root));
+    const items = unpaidList(data).sort((a, b) => (a.vence || a.fecha || '').localeCompare(b.vence || b.fecha || ''));
+    if (!items.length) return h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' }, h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'No hay consumos de crédito sin pagar.'));
+    const total = items.reduce((s, p) => s + p.monto, 0);
+    return h('div', {},
+      h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Consumos de tarjeta aún sin pagar · total ', h('b', { class: 'text-slate-200' }, fmtMoney(total)), ' · marca ✓ cuando ya los pagaste.'),
+      h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, items.map((p) => {
+        const box = h('input', { type: 'checkbox', class: 'h-5 w-5 shrink-0 accent-emerald-500', disabled: !p.id, 'aria-label': `Marcar como pagado: ${p.detalle}` });
+        box.addEventListener('change', () => {
+          if (!box.checked) return;
+          markPaid(p, box, () => {
+            data.cards.cards.forEach((c) => { c.pendientes = c.pendientes.filter((x) => x.id !== p.id); });
+            renderInbox(root);
+          });
+        });
+        return h('li', { class: 'flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
+          h('div', { class: 'min-w-0 flex-1' },
+            h('p', { class: 'truncate font-medium' }, p.detalle),
+            h('p', { class: 'truncate text-xs text-slate-500' }, `${p.tarjeta} · ${fmtD(p.fecha)} · ${p.tipo}${p.vence ? ` · vence ${fmtD(p.vence)}` : ''}`)),
+          h('span', { class: 'tabular-nums' }, fmtMoney(p.monto)));
+      })));
+  }
+
+  function phaseFees(root) {
+    const data = inbox.data;
+    if (!data.cal) return failure(data.calError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root));
+    const rows = dueFees(data);
+    if (!rows.length) return h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' }, h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'No quedan cuotas por pagar este mes.'));
+    const total = rows.reduce((s, r) => s + r.montos[0], 0);
+    return h('div', {},
+      h('p', { class: 'mb-3 text-sm text-slate-400' }, `Cuotas de ${data.cal.months[0]} sin pagar · total `, h('b', { class: 'text-slate-200' }, fmtMoney(total)), ' · marca ✓ cuando la pagues.'),
+      h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, rows.map((r) => {
+        const box = h('input', { type: 'checkbox', class: 'h-5 w-5 shrink-0 accent-emerald-500', disabled: !r.id, 'aria-label': `Marcar cuota pagada: ${r.compra}` });
+        box.addEventListener('change', async () => {
+          if (!box.checked) return;
+          box.disabled = true;
+          try {
+            await api('toggleCuota', { id: r.id, mes: data.cal.keys[0], pagada: true });
+            r.pagadas[0] = true; toast(`Cuota pagada: ${r.compra}`); renderInbox(root);
+          } catch (e) { box.checked = false; box.disabled = false; toast(errText(e), 'err'); }
+        });
+        return h('li', { class: 'flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
+          h('div', { class: 'min-w-0 flex-1' }, h('p', { class: 'truncate font-medium' }, r.compra), r.tarjeta && h('p', { class: 'truncate text-xs text-slate-500' }, r.tarjeta)),
+          h('span', { class: 'tabular-nums' }, fmtMoney(r.montos[0])));
+      })));
+  }
+
   function renderInbox(root) {
     const data = inbox.data;
+    if (inbox.phase !== 1) {
+      root.replaceChildren(
+        h('div', { class: 'mb-3 flex justify-end' }, h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar')),
+        phaseBar(root), inbox.phase === 2 ? phasePay(root) : phaseFees(root));
+      return;
+    }
     const counts = {};
-    const refreshCounts = () => KINDS.forEach(([k]) => { counts[k].textContent = data[k] ? data[k].items.length : '–'; });
+    const badge1 = {};
+    const refreshCounts = () => {
+      KINDS.forEach(([k]) => { counts[k].textContent = data[k] ? data[k].items.length : '–'; });
+      if (badge1.el) { const n = (data.debito ? data.debito.items.length : 0) + (data.credito ? data.credito.items.length : 0); badge1.el.textContent = n === 0 ? '✓' : n; }
+    };
     const tab = ([k, label]) => {
       counts[k] = h('span', { class: 'ml-1.5 rounded-full bg-slate-800 px-2 py-0.5 text-xs text-emerald-300' });
       const on = inbox.kind === k;
@@ -230,6 +313,7 @@
         h('div', { class: 'grid grid-cols-2 gap-1 rounded-xl bg-slate-900 p-1', role: 'tablist' }, KINDS.map(tab)),
         h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar')),
       body);
+    root.prepend(phaseBar(root, badge1));
     refreshCounts();
   }
 
@@ -450,6 +534,15 @@
     const wrap = h('div', { class: 'max-h-[65vh] overflow-auto rounded-xl border border-slate-800 bg-slate-900' });
     const more = h('button', { type: 'button', class: BTN_GHOST + ' mt-3 hidden', onclick: () => { histUi.limit += 200; draw(); } }, 'Mostrar más');
 
+    const ORDER = {
+      debito: ['fecha', 'banco / cuenta', 'tipo', 'detalle/comercio', 'descripcion', 'categoria', 'monto'],
+      credito: ['fecha', 'banco / cuenta', 'detalle/comercio', 'tipo', 'modalidad', 'n° cuotas', 'monto cuota', 'monto', 'estado', 'pagado', 'categoria'],
+    }[histUi.hoja] || [];
+    const order = [];
+    ORDER.forEach((n) => { const i = col(n); if (i >= 0) order.push(i); });
+    d.columns.forEach((c, i) => { if (!order.includes(i) && norm(c) !== 'id') order.push(i); }); // el ID no se muestra (sigue siendo buscable)
+    const isNum = (i) => ['monto', 'monto cuota', 'n° cuotas'].includes(norm(d.columns[i]));
+
     const cell = (v, i) => {
       const name = norm(d.columns[i]);
       const td = (cls, txt) => h('td', { class: 'whitespace-nowrap px-3 py-2 ' + cls }, txt);
@@ -471,8 +564,8 @@
       info.replaceChildren(...[`${rows.length} fila(s)`, iM >= 0 ? [' · entradas ', h('b', { class: 'text-emerald-300' }, fmtMoney(sum((v) => v > 0))), ' · salidas ', h('b', { class: 'text-rose-300' }, fmtMoney(sum((v) => v < 0))), ' · neto ', h('b', { class: 'text-slate-200' }, fmtMoney(sum(() => true)))] : '',
         d.truncated ? ` · (la hoja tiene ${d.total}, se cargan las ${d.rows.length} más recientes)` : ''].flat());
       wrap.replaceChildren(rows.length ? h('table', { class: 'w-full text-sm' },
-        h('thead', {}, h('tr', {}, d.columns.map((c, i) => h('th', { class: 'sticky top-0 z-10 whitespace-nowrap bg-slate-800 px-3 py-2 font-medium text-slate-300 ' + (i === iM ? 'text-right' : 'text-left') }, c)))),
-        h('tbody', {}, shown.map((r) => h('tr', { class: 'border-t border-slate-800 hover:bg-slate-800/60' }, r.map(cell)))))
+        h('thead', {}, h('tr', {}, order.map((i) => h('th', { class: 'sticky top-0 z-10 whitespace-nowrap bg-slate-800 px-3 py-2 font-medium text-slate-300 ' + (isNum(i) ? 'text-right' : 'text-left') }, d.columns[i])))),
+        h('tbody', {}, shown.map((r) => h('tr', { class: 'border-t border-slate-800 hover:bg-slate-800/60' }, order.map((i) => cell(r[i], i))))))
         : h('p', { class: 'p-8 text-center text-sm text-slate-500' }, 'Sin resultados.'));
       more.classList.toggle('hidden', rows.length <= shown.length);
     }
@@ -763,10 +856,84 @@
     }
   }
 
+  /* ---------- cuadre diario (solo PC): checklist de cuentas que se reinicia cada día ----------
+     Vive en este navegador (localStorage), no en el Excel. */
+  const daily = (() => {
+    const K = { accounts: 'fos.cuentas', done: 'fos.daily' };
+    const FALLBACK = ['BCP', 'Interbank', 'Efectivo', 'Yape'];
+    const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+    const readJson = (k, def) => { try { const v = JSON.parse(ls.get(k)); return v == null ? def : v; } catch { return def; } };
+    let accounts = readJson(K.accounts, null);
+    let done = readJson(K.done, { date: today(), items: [] });
+    let editing = false, open = false, fetched = false;
+    const save = () => { ls.set(K.accounts, JSON.stringify(accounts || [])); ls.set(K.done, JSON.stringify(done)); };
+    const rollover = () => { if (done.date !== today()) { done = { date: today(), items: [] }; save(); } };
+
+    const fab = h('button', { type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', title: 'Cuadre diario',
+      class: 'fixed bottom-6 right-6 z-40 hidden items-center gap-2 rounded-full border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-medium text-slate-100 shadow-xl hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 md:flex' });
+    const panel = h('div', { role: 'dialog', 'aria-label': 'Cuadre diario', class: 'hidden' });
+    const PANEL = 'fixed bottom-20 right-6 z-40 w-80 rounded-2xl border border-slate-700 bg-slate-900 p-4 shadow-2xl ';
+
+    const list = () => accounts || FALLBACK;
+    const pending = () => list().filter((a) => !done.items.includes(a)).length;
+
+    function draw() {
+      rollover();
+      const n = pending(), all = n === 0 && list().length > 0;
+      fab.replaceChildren(h('span', { class: all ? 'text-emerald-400' : 'text-amber-300', 'aria-hidden': 'true' }, all ? '✓' : '☐'), 'Cuadre diario',
+        h('span', { class: 'rounded-full px-2 py-0.5 text-xs ' + (all ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300') }, all ? 'al día' : `${n} pend.`));
+      fab.setAttribute('aria-expanded', open ? 'true' : 'false');
+      panel.className = open ? PANEL + 'hidden md:block' : 'hidden';
+      if (!open) return;
+      const d = new Date();
+      const items = list().map((a) => {
+        const box = h('input', { type: 'checkbox', class: 'h-5 w-5 accent-emerald-500', checked: done.items.includes(a), 'aria-label': `Cuenta cuadrada: ${a}` });
+        box.addEventListener('change', () => { done.items = box.checked ? [...new Set([...done.items, a])] : done.items.filter((x) => x !== a); save(); draw(); });
+        return h('li', { class: 'flex items-center gap-3 py-1.5 text-sm' },
+          h('label', { class: 'flex flex-1 cursor-pointer items-center gap-3 ' + (done.items.includes(a) ? 'text-slate-500 line-through' : 'text-slate-200') }, box, a),
+          editing && h('button', { type: 'button', class: 'rounded px-2 text-slate-500 hover:text-rose-300', 'aria-label': `Quitar ${a}`, onclick: () => { accounts = list().filter((x) => x !== a); save(); draw(); } }, '×'));
+      });
+      const add = h('input', { class: INPUT + ' !py-1.5', placeholder: 'Nueva cuenta…', maxlength: '30', 'aria-label': 'Nueva cuenta' });
+      const addForm = editing && h('form', { class: 'mt-2 flex gap-2', onsubmit: (e) => {
+        e.preventDefault(); const v = add.value.trim();
+        if (v && !list().includes(v)) { accounts = [...list(), v]; save(); draw(); }
+      } }, add, h('button', { class: BTN + ' !px-3 !py-1.5', type: 'submit' }, 'Añadir'));
+      panel.replaceChildren(
+        h('div', { class: 'mb-2 flex items-baseline justify-between' },
+          h('h2', { class: 'text-sm font-semibold' }, 'Cuadre de hoy'),
+          h('span', { class: 'text-xs text-slate-500' }, `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} · se reinicia cada día`)),
+        h('p', { class: 'mb-2 text-xs text-slate-400' }, 'Marca cada cuenta cuando ya creaste sus movimientos y el saldo cuadra.'),
+        h('ul', { class: 'divide-y divide-slate-800' }, items),
+        addForm,
+        h('div', { class: 'mt-3 flex justify-between text-xs' },
+          h('button', { type: 'button', class: 'text-slate-400 underline decoration-dotted hover:text-slate-200', onclick: () => { editing = !editing; draw(); } }, editing ? 'Listo' : 'Editar cuentas'),
+          h('button', { type: 'button', class: 'text-slate-400 underline decoration-dotted hover:text-slate-200', onclick: () => { done = { date: today(), items: [] }; save(); draw(); } }, 'Reiniciar hoy')));
+    }
+
+    async function seedAccounts() { // primera vez: toma tus cuentas y tarjetas del Excel
+      if (accounts || fetched || !hasCreds()) return;
+      fetched = true;
+      try {
+        const r = await api('getCategories');
+        const names = [...new Set([...(r.cuentas || []), ...(r.tarjetas || [])])].filter(Boolean);
+        if (names.length && !accounts) { accounts = names; save(); draw(); }
+      } catch { /* se queda con la lista por defecto */ }
+    }
+    fab.addEventListener('click', () => { open = !open; if (open) seedAccounts(); draw(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open) { open = false; draw(); fab.focus(); } });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) draw(); });
+    setInterval(draw, 60000); // si la app queda abierta pasada la medianoche, se reinicia sola
+    return {
+      mount() { document.body.append(fab, panel); draw(); },
+      sync() { fab.classList.toggle('md:flex', hasCreds()); if (!hasCreds()) { open = false; panel.className = 'hidden'; } else seedAccounts(); },
+    };
+  })();
+
   /* ---------- router ---------- */
   const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: viewManual, calendario: viewCalendar, resumen: viewSummary, movimientos: viewHistory };
   const currentView = () => { const v = location.hash.slice(1); return VIEWS[v] ? v : 'inbox'; };
   function route() {
+    daily.sync();
     if (!hasCreds()) { openSetup(); return; }
     const v = currentView();
     document.querySelectorAll('[data-nav]').forEach((a) => {
@@ -780,6 +947,7 @@
   /* ---------- arranque ---------- */
   document.addEventListener('DOMContentLoaded', () => {
     hydrateIcons();
+    daily.mount();
     initSetup();
     $('#btn-yape').addEventListener('click', syncYape);
     $('#btn-logout').addEventListener('click', () => {
