@@ -651,6 +651,7 @@
         setCats(d.categories || state.cats);
         mov.d = d; mov.cuenta[k] = d.cuenta || ''; saveMov();
         if (mov.ui && mov.ui.root === root && root.contains(mov.ui.el)) mov.ui.refresh(); else buildMov(root);
+        warmAccounts(k, d);
       } catch (e) {
         console.error(e);
         root.replaceChildren(h('div', { class: 'rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-100' }, 'No se pudo mostrar Movimientos: ' + (e && e.message),
@@ -1468,10 +1469,22 @@
           if (res[2] && res[2].ok) put('sum:actual', res[2].data);
           if (res[3] && res[3].ok) put('cats', res[3].data);
           if (res[4] && res[4].ok) put('cards', res[4].data);
+          ['debito', 'credito'].forEach((k, i) => { if (res[i] && res[i].ok) warmAccounts(k, res[i].data); });
         })(),
       ]);
     })().catch(() => { /* la precarga es un extra: si falla, cada pantalla carga como siempre */ }).finally(() => { warming = null; });
     return warming;
+  }
+  // precarga las demás cuentas/tarjetas de la hoja: cambiar de cuenta en Movimientos pasa a ser instantáneo
+  async function warmAccounts(hoja, d) {
+    const gen = cacheGen;
+    const others = (d.cuentas || []).map((c) => c.nombre).filter((n) => n !== d.cuenta && !cacheGet(`mov:${hoja}:${n}`)).slice(0, 8);
+    if (!others.length) return;
+    try {
+      const res = (await api('batch', { calls: others.map((n) => ({ action: 'getHistory', payload: { hoja, cuenta: n } })) })).results;
+      if (gen !== cacheGen) return;
+      res.forEach((r, i) => { if (r && r.ok) cacheSet(`mov:${hoja}:${others[i]}`, r.data); });
+    } catch { /* extra: si falla, se carga al entrar */ }
   }
   function scheduleWarm() { clearTimeout(warmTimer); warmTimer = setTimeout(() => { if (hasCreds()) warmCache(); }, 500); }
 
