@@ -1387,8 +1387,10 @@
     root.replaceChildren(
       h('h2', { class: 'mb-1 text-base font-semibold md:hidden' }, 'Tarjetas'),
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Meta: al corte, solo la cuota del mes; el resto de consumos en 0.'),
-      h('div', { class: 'grid gap-3 lg:grid-cols-2 lg:items-start 2xl:grid-cols-3' }, d.cards.map((c) => cardPanel(c, () => viewCards(root, true)))));
+      h('div', { class: 'grid gap-3 ' + cardCols(d.cards.length) }, d.cards.map((c) => cardPanel(c, () => viewCards(root, true)))));
   }
+  // columnas sin «huérfanas»: 3 o 6 tarjetas → 3 por fila; 2, 4, 5… → 2 por fila. Las de una misma fila tienen igual alto.
+  const cardCols = (n) => (n <= 1 ? 'lg:max-w-2xl' : n % 3 === 0 ? 'lg:grid-cols-2 2xl:grid-cols-3' : 'lg:grid-cols-2');
 
   /* ---------- vista: Resumen (Débito y Crédito son visiones independientes: nunca se suman) ---------- */
   const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'setiembre', 'octubre', 'noviembre', 'diciembre'];
