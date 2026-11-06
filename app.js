@@ -640,10 +640,21 @@
     };
     const paint = (d) => {
       if (mov.hoja !== k) return;
-      ensureCol(d, 'Comentario'); if (k === 'credito') ensureCol(d, 'Categoría');
-      setCats(d.categories || state.cats);
-      mov.d = d; mov.cuenta[k] = d.cuenta || ''; saveMov();
-      if (mov.ui && mov.ui.root === root && root.contains(mov.ui.el)) mov.ui.refresh(); else buildMov(root);
+      if (!Array.isArray(d.cuentas) || !d.totales) {
+        root.replaceChildren(h('div', { class: 'rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100' },
+          'El API de Apps Script es de una versión anterior. Sube Api.gs, Historial.gs, Resumen.gs, Categorias.gs y el nuevo Movimientos.gs, y despliega «Nueva versión».'));
+        return;
+      }
+      try {
+        ensureCol(d, 'Comentario'); if (k === 'credito') ensureCol(d, 'Categoría');
+        setCats(d.categories || state.cats);
+        mov.d = d; mov.cuenta[k] = d.cuenta || ''; saveMov();
+        if (mov.ui && mov.ui.root === root && root.contains(mov.ui.el)) mov.ui.refresh(); else buildMov(root);
+      } catch (e) {
+        console.error(e);
+        root.replaceChildren(h('div', { class: 'rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-100' }, 'No se pudo mostrar Movimientos: ' + (e && e.message),
+          h('button', { class: BTN_GHOST + ' mt-3 block', onclick: () => viewHistory(root, true) }, 'Reintentar')));
+      }
     };
     if (refetch) cacheClear();
     await swr(root, `mov:${k}:${want}`, fetcher, (d) => paint(d), { loadingText: 'Cargando movimientos…', retry: () => viewHistory(root, true) });
