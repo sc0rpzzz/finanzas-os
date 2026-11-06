@@ -23,9 +23,10 @@
     .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spin { animation: none; } * { transition: none !important; } }
   </style>
-  <script src="config.js?v=9"></script>
+  <script src="config.js?v=10"></script>
 </head>
 <body class="min-h-screen font-sans antialiased">
+  <div id="busy" class="hidden fixed inset-x-0 top-0 z-50 h-0.5 animate-pulse bg-emerald-400" role="progressbar" aria-label="Actualizando"></div>
   <header class="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/90 backdrop-blur safe-t md:pl-56">
     <div class="mx-auto flex max-w-3xl items-center justify-between gap-2 px-4 py-3 md:max-w-6xl md:px-8">
       <h1 class="text-lg font-semibold tracking-tight md:hidden">Finanzas <span class="text-emerald-400">OS</span></h1>
@@ -80,6 +81,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=9" defer></script>
+  <script src="app.js?v=10" defer></script>
 </body>
 </html>

@@ -14,6 +14,15 @@
     del: (k) => { try { localStorage.removeItem(k); } catch { /* sin storage */ } },
   };
 
+  /* ---------- caché local (stale-while-revalidate): pinta al instante lo último visto y refresca por detrás ---------- */
+  const CACHE_PREFIX = 'fos.c.';
+  const cacheGet = (key) => { try { const j = JSON.parse(localStorage.getItem(CACHE_PREFIX + key)); return j && j.v !== undefined ? j.v : null; } catch { return null; } };
+  const cacheSet = (key, v) => { try { const s = JSON.stringify({ t: Date.now(), v }); if (s.length < 1500000) localStorage.setItem(CACHE_PREFIX + key, s); } catch { /* sin espacio: no pasa nada */ } };
+  const cacheClear = () => { try { Object.keys(localStorage).filter((k) => k.startsWith(CACHE_PREFIX)).forEach((k) => localStorage.removeItem(k)); } catch { /* nada */ } };
+  const WRITE_ACTIONS = new Set(['categorize', 'setPagado', 'toggleCuota', 'setEstado', 'addManual', 'addCreditConsumo', 'addPagoTarjeta', 'syncYape']);
+  let inflight = 0;
+  const busy = (d) => { inflight = Math.max(0, inflight + d); const el = document.getElementById('busy'); if (el) el.classList.toggle('hidden', inflight === 0); };
+
   /* ---------- utilidades DOM ---------- */
   const $ = (s, r = document) => r.querySelector(s);
   function h(tag, props = {}, ...kids) {
@@ -100,6 +109,7 @@
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let res;
+    busy(1);
     try {
       res = await fetch(url, {
         method: 'POST', redirect: 'follow', credentials: 'omit', signal: ctrl.signal,
@@ -109,7 +119,7 @@
     } catch (e) {
       throw new ApiError(e.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK');
     } finally {
-      clearTimeout(timer);
+      clearTimeout(timer); busy(-1);
     }
     let json;
     try { json = await res.json(); } catch { throw new ApiError('BAD_RESPONSE'); }
@@ -118,6 +128,7 @@
       if (code === 'UNAUTHORIZED' && !creds) { ls.del(KEYS.token); openSetup('El token ya no es válido. Ingresa el nuevo.'); }
       throw new ApiError(code, json && json.message);
     }
+    if (WRITE_ACTIONS.has(action)) cacheClear(); // lo guardado ya no es fiel: mejor cargar de nuevo que mostrar algo viejo
     return json.data;
   }
 
@@ -145,7 +156,7 @@
       btn.disabled = true; btn.textContent = 'Verificando…';
       try {
         await api('ping', {}, { creds: { url, token }, timeoutMs: 20000 });
-        ls.set(KEYS.url, url); ls.set(KEYS.token, token);
+        ls.set(KEYS.url, url); ls.set(KEYS.token, token); cacheClear();
         dlg.close();
         route();
       } catch (ex) {
@@ -158,6 +169,29 @@
   const hasCreds = () => !!(ls.get(KEYS.url) && ls.get(KEYS.token));
 
   /* ---------- estado ---------- */
+  let navTok = 0; // se incrementa en cada cambio de vista: una respuesta tardía no pisa otra pantalla
+  async function swr(root, key, fetcher, paint, { loadingText = 'Cargando…', retry, onError } = {}) {
+    const tok = navTok;
+    const cached = cacheGet(key);
+    if (cached) paint(cached, true); else root.replaceChildren(loading(loadingText));
+    let fresh;
+    try { fresh = await fetcher(); } catch (e) {
+      if (tok !== navTok || e.code === 'UNAUTHORIZED' || e.code === 'NO_CREDENTIALS') return;
+      if (cached) { toast('Sin conexión: mostrando lo último guardado', 'err'); return; }
+      if (onError && onError(e)) return;
+      root.replaceChildren(failure(e, retry));
+      return;
+    }
+    cacheSet(key, fresh);
+    if (tok !== navTok) return;
+    if (cached) {
+      if (JSON.stringify(cached) === JSON.stringify(fresh)) return; // nada cambió: sin parpadeo
+      const a = document.activeElement;
+      if (a && root.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return; // no pisar lo que estás escribiendo
+    }
+    paint(fresh, false);
+  }
+
   const state = { cats: [] };
   const mergeCats = (list) => {
     const set = new Set([...state.cats, ...list]);
@@ -176,24 +210,35 @@
   const inbox = { kind: 'debito', phase: 1, data: null };
   const KINDS = [['debito', 'Débito'], ['credito', 'Crédito']];
 
-  async function viewInbox(root, refetch = true) {
-    if (refetch || !inbox.data) {
-      root.replaceChildren(loading('Cargando movimientos…'));
-      const [d, c, cards, cal, pend] = await Promise.allSettled([api('getInbox'), api('getCreditInbox'), api('getCards'), api('getCalendar'), api('getPendingEstado')]);
-      if (d.status === 'rejected') {
-        if (d.reason.code !== 'UNAUTHORIZED' && d.reason.code !== 'NO_CREDENTIALS') root.replaceChildren(failure(d.reason, () => viewInbox(root)));
-        return;
-      }
-      inbox.data = {
-        debito: d.value, credito: c.status === 'fulfilled' ? c.value : null, creditoError: c.status === 'rejected' ? c.reason : null,
-        cards: cards.status === 'fulfilled' ? cards.value : null, cardsError: cards.status === 'rejected' ? cards.reason : null,
-        cal: cal.status === 'fulfilled' ? cal.value : null, calError: cal.status === 'rejected' ? cal.reason : null,
-        pend: pend.status === 'fulfilled' ? pend.value : null, pendError: pend.status === 'rejected' ? pend.reason : null,
-      };
-      mergeCats(d.value.categories);
-      if (c.status === 'fulfilled') mergeCats(c.value.categories);
+  const INBOX_CALLS = ['getInbox', 'getCreditInbox', 'getCards', 'getCalendar', 'getPendingEstado'];
+  // Una sola petición para todo el Inbox. Si el backend aún no tiene `batch`, cae a llamadas sueltas.
+  async function fetchInboxRaw() {
+    try {
+      return (await api('batch', { calls: INBOX_CALLS.map((action) => ({ action })) })).results;
+    } catch (e) {
+      if (e.code !== 'BAD_ACTION' && e.code !== 'BAD_BATCH') throw e;
+      const all = await Promise.allSettled(INBOX_CALLS.map((a) => api(a)));
+      return all.map((r) => (r.status === 'fulfilled' ? { ok: true, data: r.value } : { ok: false, error: r.reason.code, message: r.reason.message }));
     }
-    renderInbox(root);
+  }
+  function shapeInbox(results) {
+    const [d, c, cards, cal, pend] = results;
+    const ok = (r) => (r.ok ? r.data : null), err = (r) => (r.ok ? null : new ApiError(r.error, r.message));
+    if (!d.ok) throw new ApiError(d.error, d.message);
+    return {
+      debito: d.data, credito: ok(c), creditoError: err(c), cards: ok(cards), cardsError: err(cards),
+      cal: ok(cal), calError: err(cal), pend: ok(pend), pendError: err(pend),
+    };
+  }
+  async function viewInbox(root, refetch = true) {
+    if (!refetch && inbox.data) { renderInbox(root); return; }
+    await swr(root, 'inbox', async () => { const raw = await fetchInboxRaw(); shapeInbox(raw); return raw; },
+      (raw) => {
+        inbox.data = shapeInbox(raw);
+        mergeCats(inbox.data.debito.categories);
+        if (inbox.data.credito) mergeCats(inbox.data.credito.categories);
+        renderInbox(root);
+      }, { loadingText: 'Cargando movimientos…', retry: () => viewInbox(root) });
   }
 
   const unpaidList = (data) => (data.cards ? (data.cards.cards || []).flatMap((c) => c.pendientes.map((p) => Object.assign({ tarjeta: c.tarjeta }, p))) : []);
@@ -532,11 +577,9 @@
   async function viewHistory(root, refetch = false) {
     const k = histUi.hoja;
     if (refetch || !histUi.data[k]) {
-      root.replaceChildren(loading('Cargando movimientos…'));
-      try { histUi.data[k] = await api('getHistory', { hoja: k }); } catch (e) {
-        if (e.code !== 'UNAUTHORIZED' && e.code !== 'NO_CREDENTIALS') root.replaceChildren(failure(e, () => viewHistory(root, true)));
-        return;
-      }
+      await swr(root, 'hist:' + k, () => api('getHistory', { hoja: k }), (d, stale) => { if (histUi.hoja === k) { histUi.data[k] = d; renderHistory(root); } },
+        { loadingText: 'Cargando movimientos…', retry: () => viewHistory(root, true) });
+      return;
     }
     renderHistory(root);
   }
@@ -760,18 +803,26 @@
 
   async function viewCards(root, silent = false) {
     const y = window.scrollY;
-    if (!silent) root.replaceChildren(loading('Calculando tarjetas…'));
+    const noSheet = (e) => {
+      if (e.code !== 'NO_TARJETAS') return false;
+      root.replaceChildren(h('p', { class: 'rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100' }, 'Falta la hoja «Tarjetas». Ejecuta fosSetupTarjetas() en Apps Script.'));
+      return true;
+    };
+    if (!silent) { await swr(root, 'cards', () => api('getCards'), (d) => paintCards(root, d), { loadingText: 'Calculando tarjetas…', retry: () => viewCards(root), onError: noSheet }); return; }
     let d;
     try { d = await api('getCards'); } catch (e) {
-      if (e.code === 'NO_TARJETAS') { root.replaceChildren(h('p', { class: 'rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100' }, 'Falta la hoja «Tarjetas». Ejecuta fosSetupTarjetas() en Apps Script.')); return; }
-      if (e.code !== 'UNAUTHORIZED') root.replaceChildren(failure(e, () => viewCards(root)));
+      if (!noSheet(e) && e.code !== 'UNAUTHORIZED') root.replaceChildren(failure(e, () => viewCards(root)));
       return;
     }
+    cacheSet('cards', d);
+    paintCards(root, d);
+    window.scrollTo(0, y);
+  }
+  function paintCards(root, d) {
     root.replaceChildren(
       h('h2', { class: 'mb-1 text-base font-semibold' }, 'Tarjetas'),
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Meta: al corte, solo la cuota del mes; el resto de consumos en 0.'),
       h('div', { class: 'grid gap-3 lg:grid-cols-2 lg:items-start' }, d.cards.map((c) => cardPanel(c, () => viewCards(root, true)))));
-    if (silent) window.scrollTo(0, y);
   }
 
   /* ---------- vista: Resumen (Débito y Crédito son visiones independientes: nunca se suman) ---------- */
@@ -837,12 +888,10 @@
   }
 
   async function viewSummary(root) {
-    root.replaceChildren(loading('Calculando resumen…'));
-    let d;
-    try { d = await api('getSummary', sumUi.mes ? { mes: sumUi.mes } : {}); } catch (e) {
-      if (e.code !== 'UNAUTHORIZED') root.replaceChildren(failure(e, () => viewSummary(root)));
-      return;
-    }
+    await swr(root, 'sum:' + (sumUi.mes || 'actual'), () => api('getSummary', sumUi.mes ? { mes: sumUi.mes } : {}),
+      (d) => paintSummary(root, d), { loadingText: 'Calculando resumen…', retry: () => viewSummary(root) });
+  }
+  function paintSummary(root, d) {
     sumUi.mes = d.esActual ? null : d.mes;
     const go = (mes) => { sumUi.mes = mes; viewSummary(root); };
     const navBtn = (txt, label, mes) => h('button', { type: 'button', 'aria-label': label, disabled: !mes, onclick: () => go(mes), class: 'rounded-lg border border-slate-700 px-3 py-1.5 text-slate-200 hover:bg-slate-800 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400' }, txt);
@@ -963,6 +1012,7 @@
   const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: viewManual, calendario: viewCalendar, resumen: viewSummary, movimientos: viewHistory };
   const currentView = () => { const v = location.hash.slice(1); return VIEWS[v] ? v : 'inbox'; };
   function route() {
+    navTok++;
     daily.sync();
     if (!hasCreds()) { openSetup(); return; }
     const v = currentView();
@@ -982,7 +1032,7 @@
     $('#btn-yape').addEventListener('click', syncYape);
     $('#btn-logout').addEventListener('click', () => {
       if (!confirm('¿Cerrar sesión en este dispositivo? Se borrará el token guardado.')) return;
-      ls.del(KEYS.token); $('#view').replaceChildren(); openSetup();
+      ls.del(KEYS.token); cacheClear(); $('#view').replaceChildren(); openSetup();
     });
     window.addEventListener('hashchange', route);
     route();
