@@ -1030,9 +1030,8 @@
   /* ---------- sincronizar Yape ---------- */
   async function syncYape() {
     if (!confirm('¿Ya enviaste el correo de Yape desde la app?')) return;
-    const btn = $('#btn-yape');
-    btn.disabled = true;
-    const spin = btn.querySelector('span'); spin && spin.classList.add('spin');
+    const btns = [...document.querySelectorAll('[data-act=yape]')];
+    btns.forEach((b) => { b.disabled = true; const sp = b.querySelector('span'); sp && sp.classList.add('spin'); });
     try {
       const r = await api('syncYape', {}, { timeoutMs: 150000 });
       toast(r.added ? `Yape: ${r.added} movimiento(s) nuevo(s)` : 'Yape: sin movimientos nuevos');
@@ -1040,7 +1039,7 @@
     } catch (e) {
       toast(errText(e), 'err');
     } finally {
-      btn.disabled = false; spin && spin.classList.remove('spin');
+      btns.forEach((b) => { b.disabled = false; const sp = b.querySelector('span'); sp && sp.classList.remove('spin'); });
     }
   }
 
@@ -1138,11 +1137,11 @@
     hydrateIcons();
     daily.mount();
     initSetup();
-    $('#btn-yape').addEventListener('click', syncYape);
-    $('#btn-logout').addEventListener('click', () => {
+    document.querySelectorAll('[data-act=yape]').forEach((b) => b.addEventListener('click', syncYape));
+    document.querySelectorAll('[data-act=logout]').forEach((b) => b.addEventListener('click', () => {
       if (!confirm('¿Cerrar sesión en este dispositivo? Se borrará el token guardado.')) return;
       ls.del(KEYS.token); cacheClear(); $('#view').replaceChildren(); openSetup();
-    });
+    }));
     window.addEventListener('hashchange', route);
     route();
     if ('serviceWorker' in navigator && location.protocol === 'https:') {
