@@ -1,5 +1,5 @@
 // Service worker: solo cachea el "app shell". Las llamadas a la API (POST a script.google.com) nunca se tocan.
-const VERSION = 'fos-v13';
+const VERSION = 'fos-v14';
 const SHELL = ['./', './index.html', './app.js', './config.js', './manifest.webmanifest',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 

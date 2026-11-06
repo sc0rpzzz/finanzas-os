@@ -19,7 +19,7 @@
   const cacheGet = (key) => { try { const j = JSON.parse(localStorage.getItem(CACHE_PREFIX + key)); return j && j.v !== undefined ? j.v : null; } catch { return null; } };
   const cacheSet = (key, v) => { try { const s = JSON.stringify({ t: Date.now(), v }); if (s.length < 1500000) localStorage.setItem(CACHE_PREFIX + key, s); } catch { /* sin espacio: no pasa nada */ } };
   const cacheClear = () => { try { Object.keys(localStorage).filter((k) => k.startsWith(CACHE_PREFIX)).forEach((k) => localStorage.removeItem(k)); } catch { /* nada */ } };
-  const WRITE_ACTIONS = new Set(['categorize', 'setPagado', 'toggleCuota', 'setEstado', 'addManual', 'addCreditConsumo', 'addPagoTarjeta', 'syncYape', 'saveCategory']);
+  const WRITE_ACTIONS = new Set(['updateMovimiento', 'addMovimientos', 'categorizeBatch', 'resolveDuplicado', 'categorize', 'setPagado', 'toggleCuota', 'setEstado', 'addManual', 'addCreditConsumo', 'addPagoTarjeta', 'syncYape', 'saveCategory']);
   let inflight = 0;
   const busy = (d) => { inflight = Math.max(0, inflight + d); const el = document.getElementById('busy'); if (el) el.classList.toggle('hidden', inflight === 0); };
 
@@ -401,94 +401,169 @@
 
     const cur = data[inbox.kind];
     const body = h('div');
+    const bar = saveBar(root);
     if (!cur) {
       body.append(failure(data.creditoError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root)));
     } else {
+      pruneStage(data);
       const list = h('ul', { class: 'grid gap-3 lg:grid-cols-2' });
       const empty = h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' },
         h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'Todo categorizado. No hay movimientos pendientes.'));
       const sync = () => { empty.classList.toggle('hidden', list.children.length > 0); refreshCounts(); };
-      cur.items.forEach((it) => list.append(inboxCard(it, inbox.kind, (li) => {
-        cur.items = cur.items.filter((x) => x.id !== it.id);
-        li.remove(); sync();
-      })));
+      cur.items.forEach((it) => list.append(inboxCard(it, inbox.kind, bar.update)));
+      const dups = inbox.kind === 'debito' && Array.isArray(cur.duplicados) ? cur.duplicados : [];
       body.append(...[
         cur.withoutId > 0 && h('p', { class: 'mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100' },
           `${cur.withoutId} fila(s) sin ID no aparecen aquí. Ejecuta fosBackfillIds() en Apps Script.`),
+        dups.length > 0 && h('div', { class: 'mb-4 space-y-2' }, dups.map((p) => dupAlert(p, root))),
+        cur.items.length > 0 && h('p', { class: 'mb-2 text-xs text-slate-400' }, 'Elige la categoría de cada movimiento y guarda todo de una vez con el botón de abajo.'),
         list, empty].filter(Boolean));
       queueMicrotask(sync);
     }
 
-    root.replaceChildren(
+    root.replaceChildren(...[
       h('div', { class: 'mb-3 flex items-center justify-between gap-2' },
         h('div', { class: 'grid grid-cols-2 gap-1 rounded-xl bg-slate-900 p-1', role: 'tablist' }, KINDS.map(tab)),
         h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar')),
-      body);
+      body, bar.el].filter(Boolean));
     root.prepend(phaseBar(root, badge1));
-    refreshCounts();
+    refreshCounts(); bar.update();
   }
 
-  function inboxCard(it, kind, onDone) {
+  /* ---- clasificar en lote: lo elegido queda "en preparación" y se guarda todo junto ---- */
+  const STAGE_KEY = 'fos.stage';
+  const stage = (() => { let s = {}; try { s = JSON.parse(ls.get(STAGE_KEY)) || {}; } catch { s = {}; } return { debito: s.debito || {}, credito: s.credito || {}, errs: {} }; })();
+  const saveStage = () => ls.set(STAGE_KEY, JSON.stringify({ debito: stage.debito, credito: stage.credito }));
+  const stagedTotal = () => Object.keys(stage.debito).length + Object.keys(stage.credito).length;
+  function pruneStage(data) { // lo que ya no está pendiente (se categorizó en otro lado) deja de estar en preparación
+    KINDS.forEach(([k]) => {
+      if (!data[k]) return;
+      const ids = new Set(data[k].items.map((i) => i.id));
+      Object.keys(stage[k]).forEach((id) => { if (!ids.has(id)) delete stage[k][id]; });
+    });
+    saveStage();
+  }
+
+  function saveBar(root) {
+    const btn = h('button', { type: 'button', class: BTN + ' px-5' }, 'Guardar');
+    const clear = h('button', { type: 'button', class: BTN_GHOST, onclick: () => { stage.debito = {}; stage.credito = {}; stage.errs = {}; saveStage(); renderInbox(root); } }, 'Descartar');
+    const label = h('span', { class: 'text-sm text-slate-200' });
+    const el = h('div', { class: 'sticky bottom-20 z-20 mt-4 hidden items-center justify-between gap-3 rounded-xl border border-emerald-500/40 bg-slate-900/95 p-3 shadow-xl backdrop-blur md:bottom-4', role: 'region', 'aria-label': 'Cambios sin guardar' }, label, h('div', { class: 'flex gap-2' }, clear, btn));
+    const update = () => {
+      const n = stagedTotal();
+      el.classList.toggle('hidden', n === 0); el.classList.toggle('flex', n > 0);
+      label.textContent = `${n} movimiento${n === 1 ? '' : 's'} listo${n === 1 ? '' : 's'} para guardar`;
+      btn.textContent = `Guardar ${n} cambio${n === 1 ? '' : 's'}`;
+    };
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; clear.disabled = true; btn.textContent = 'Guardando…';
+      let ok = 0, fail = 0;
+      for (const [k] of KINDS) {
+        const ids = Object.keys(stage[k]);
+        if (!ids.length || !inbox.data[k]) continue;
+        const items = ids.map((id) => { const v = stage[k][id]; return v.pago ? { id, categoria: 'Pago Tarjeta', pagoTarjeta: true } : { id, categoria: v.categoria, emoji: v.emoji }; });
+        for (let i = 0; i < items.length; i += 100) {
+          try {
+            const r = await api('categorizeBatch', { hoja: k, items: items.slice(i, i + 100) });
+            r.results.forEach((x) => {
+              if (x.ok) {
+                ok++; delete stage[k][x.id]; delete stage.errs[x.id];
+                inbox.data[k].items = inbox.data[k].items.filter((it) => it.id !== x.id);
+                if (x.categoria && x.categoria !== 'Pago Tarjeta') mergeCats([x.categoria]);
+              } else { fail++; stage.errs[x.id] = ERR_TEXT[x.error] || x.message || x.error; }
+            });
+          } catch (e) { toast(errText(e), 'err'); fail += items.slice(i, i + 100).length; }
+        }
+      }
+      saveStage();
+      toast(fail ? `${ok} guardado(s) · ${fail} con error (míralas abajo)` : `${ok} movimiento(s) guardado(s)`, fail ? 'err' : 'ok');
+      renderInbox(root);
+    });
+    return { el, update };
+  }
+
+  function dupAlert(p, root) {
+    const row = (tag, x) => h('div', { class: 'flex items-baseline justify-between gap-3 text-sm' },
+      h('span', { class: 'min-w-0 truncate' }, h('span', { class: 'mr-2 rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-200' }, tag), x.detalle),
+      h('span', { class: 'shrink-0 tabular-nums text-rose-300' }, `${fmtMoney(x.monto)} · ${fmtDate(x.fecha)}`));
+    const act = async (accion, dup) => {
+      el.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      try {
+        await api('resolveDuplicado', { accion, a: p.yape.id, b: p.banco.id, duplicado: dup });
+        if (dup) { delete stage.debito[dup]; saveStage(); }
+        toast(accion === 'marcar' ? 'Marcado como duplicado: ya no cuenta en tus totales' : 'Listo: no se volverá a avisar de este par');
+        viewInbox(root);
+      } catch (e) { toast(errText(e), 'err'); el.querySelectorAll('button').forEach((b) => { b.disabled = false; }); }
+    };
+    const el = h('div', { class: 'rounded-xl border border-amber-500/50 bg-amber-500/10 p-3', role: 'alert' },
+      h('p', { class: 'text-sm font-semibold text-amber-100' }, `⚠ Posible duplicado Yape ↔ BCP · confianza ${p.confianza} · a ${p.minutos} min`),
+      h('div', { class: 'mt-2 space-y-1' }, row('Yape', p.yape), row('BCP', p.banco)),
+      h('p', { class: 'mt-1 text-xs text-slate-400' }, 'Un pago por Yape a una billetera externa puede entrar dos veces: por Yape y por el consumo débito del BCP.'),
+      h('div', { class: 'mt-2 flex flex-wrap gap-2' },
+        h('button', { type: 'button', class: BTN + ' !px-3 !py-1.5', onclick: () => act('marcar', p.banco.id) }, 'Es duplicado: ocultar el del BCP'),
+        h('button', { type: 'button', class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => act('marcar', p.yape.id) }, 'Ocultar el de Yape'),
+        h('button', { type: 'button', class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => act('descartar') }, 'No es duplicado')));
+    return el;
+  }
+
+  function inboxCard(it, kind, onChange) {
     const itemTipo = kind === 'credito' || (it.monto || 0) < 0 ? 'Egreso' : 'Ingreso'; // las categorías se filtran por el signo del monto
+    const st = stage[kind][it.id];
+    const stagedNew = st && st.categoria && !catsFor(itemTipo).includes(st.categoria);
     const sel = h('select', { class: INPUT, 'aria-label': 'Categoría' },
-      h('option', { value: '', disabled: true, selected: true }, 'Elegir categoría…'),
+      h('option', { value: '', disabled: true }, 'Elegir categoría…'),
       catsFor(itemTipo).map((c) => h('option', { value: c }, catLabel(c))),
       h('option', { value: NEW_CAT }, `+ Nueva categoría de ${itemTipo.toLowerCase()}…`));
-    const newInp = h('input', { class: INPUT + ' hidden mt-2', placeholder: 'Nombre de la categoría', maxlength: '40', 'aria-label': 'Nueva categoría' });
-    const emoInp = h('input', { class: INPUT + ' mt-2 w-24 text-center text-xl', placeholder: '😀', maxlength: '16', 'aria-label': 'Emoji de la nueva categoría (obligatorio)', inputmode: 'text' });
+    sel.value = st && st.categoria ? (stagedNew ? NEW_CAT : st.categoria) : '';
+    const newInp = h('input', { class: INPUT + (stagedNew ? '' : ' hidden') + ' mt-2', placeholder: 'Nombre de la categoría', maxlength: '40', 'aria-label': 'Nueva categoría', value: stagedNew ? st.categoria : '' });
+    const emoInp = h('input', { class: INPUT + ' mt-2 w-24 text-center text-xl', placeholder: '😀', maxlength: '16', 'aria-label': 'Emoji de la nueva categoría (obligatorio)', inputmode: 'text', value: stagedNew ? st.emoji || '' : '' });
     const emoBox = h('div', { class: 'hidden' }, h('p', { class: 'mt-2 text-xs text-slate-400' }, 'Toda categoría nueva necesita un emoji:'), emoInp, emojiPicker(emoInp));
     const isNewName = () => sel.value === NEW_CAT && !state.cats.some((c) => normKey(c) === normKey(newInp.value));
-    const btn = h('button', { class: BTN + ' w-full sm:w-auto', disabled: true, type: 'button' }, 'Guardar');
-    const payBtn = h('button', { class: 'mt-2 text-xs text-slate-400 underline decoration-dotted underline-offset-2 hover:text-slate-200', type: 'button' }, 'Es un pago de tarjeta (no es gasto)');
+    const payBtn = h('button', { class: 'mt-2 text-xs text-slate-400 underline decoration-dotted underline-offset-2 hover:text-slate-200', type: 'button' });
+    const flag = h('span', { class: 'hidden rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300' }, '✓ listo');
+    const errP = h('p', { class: 'mt-2 text-xs text-rose-300' }, stage.errs[it.id] || '');
     const chosen = () => (sel.value === NEW_CAT ? newInp.value.trim() : sel.value);
-    const sync = () => {
+    const li = h('li', { class: 'rounded-xl border bg-slate-900 p-4' });
+    const paint = () => {
+      const s = stage[kind][it.id];
       emoBox.classList.toggle('hidden', !isNewName());
-      btn.disabled = !validCat(chosen()) || (isNewName() && !validEmoji(emoInp.value));
+      flag.classList.toggle('hidden', !s);
+      li.className = 'rounded-xl border bg-slate-900 p-4 ' + (s ? 'border-emerald-500/50' : 'border-slate-800');
+      payBtn.textContent = s && s.pago ? '✓ Marcado como pago de tarjeta (quitar)' : 'Es un pago de tarjeta (no es gasto)';
+      errP.classList.toggle('hidden', !errP.textContent);
     };
-    sel.addEventListener('change', () => { newInp.classList.toggle('hidden', sel.value !== NEW_CAT); if (sel.value === NEW_CAT) newInp.focus(); sync(); });
-    newInp.addEventListener('input', sync);
-    emoInp.addEventListener('input', sync);
+    const restage = () => {
+      const c = chosen();
+      if (validCat(c) && (!isNewName() || validEmoji(emoInp.value))) stage[kind][it.id] = isNewName() ? { categoria: c, emoji: emoInp.value.trim() } : { categoria: c };
+      else delete stage[kind][it.id];
+      delete stage.errs[it.id]; errP.textContent = '';
+      saveStage(); paint(); onChange();
+    };
+    sel.addEventListener('change', () => { newInp.classList.toggle('hidden', sel.value !== NEW_CAT); if (sel.value === NEW_CAT) newInp.focus(); restage(); });
+    newInp.addEventListener('input', restage);
+    emoInp.addEventListener('input', restage);
+    payBtn.addEventListener('click', () => {
+      const s = stage[kind][it.id];
+      if (s && s.pago) delete stage[kind][it.id]; else { stage[kind][it.id] = { pago: true }; sel.value = ''; newInp.classList.add('hidden'); }
+      delete stage.errs[it.id]; errP.textContent = '';
+      saveStage(); paint(); onChange();
+    });
 
-    const li = h('li', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-4' },
+    li.append(...[
       h('div', { class: 'flex items-start justify-between gap-3' },
         h('div', { class: 'min-w-0' },
           h('p', { class: 'truncate font-medium' }, it.detalle || '(sin detalle)'),
           it.descripcion && h('p', { class: 'truncate text-sm text-slate-400' }, it.descripcion),
           h('p', { class: 'mt-0.5 text-xs text-slate-500' }, `${fmtDate(it.fecha)} · ${it.banco}`, it.cuotas ? ` · ${it.cuotas} cuotas` : '')),
-        h('p', { class: 'shrink-0 font-semibold tabular-nums ' + ((it.monto || 0) < 0 ? 'text-rose-300' : 'text-emerald-300') }, fmtMoney(it.monto))),
-      h('div', { class: 'mt-3 flex flex-col gap-2 sm:flex-row sm:items-start' },
-        h('div', { class: 'flex-1' }, sel, newInp, emoBox), btn),
-      kind === 'debito' && payBtn);
-
-    payBtn.addEventListener('click', async () => {
-      payBtn.disabled = true; btn.disabled = true;
-      try {
-        await api('categorize', { id: it.id, pagoTarjeta: true, categoria: 'Pago Tarjeta', onlyIfBlank: true, hoja: 'debito' });
-        toast('Marcado como pago de tarjeta');
-        onDone(li);
-      } catch (e) { toast(errText(e), 'err'); payBtn.disabled = false; sync(); }
-    });
-
-    btn.addEventListener('click', async () => {
-      const categoria = chosen();
-      if (!validCat(categoria)) return;
-      const emoji = isNewName() ? emoInp.value.trim() : undefined;
-      if (isNewName() && !validEmoji(emoji)) return;
-      btn.disabled = true; btn.textContent = 'Guardando…';
-      try {
-        const r = await api('categorize', { id: it.id, categoria, emoji, onlyIfBlank: true, hoja: kind });
-        mergeCats([r.categoria || categoria]);
-        toast(r.updated ? `Guardado en «${categoria}»` : 'Ya tenía categoría (otro dispositivo)');
-        onDone(li);
-      } catch (e) {
-        toast(errText(e), 'err');
-        btn.textContent = 'Guardar'; sync();
-      }
-    });
+        h('div', { class: 'flex shrink-0 flex-col items-end gap-1' },
+          h('p', { class: 'font-semibold tabular-nums ' + ((it.monto || 0) < 0 ? 'text-rose-300' : 'text-emerald-300') }, fmtMoney(it.monto)), flag)),
+      h('div', { class: 'mt-3' }, h('div', {}, sel, newInp, emoBox)),
+      kind === 'debito' && payBtn, errP].filter(Boolean));
+    paint();
     return li;
   }
 
-  /* ---------- vista: Nuevo (efectivo / consumo de tarjeta / pago de tarjeta) ---------- */
+  /* ---------- vista: Movimientos (una cuenta a la vez, tabla editable y panel para cargar varias filas) ---------- */
   const pad = (n) => String(n).padStart(2, '0');
   const nowLocalInput = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   function rand4() {
@@ -498,221 +573,415 @@
   }
   // MAN_YYYYMMDD_HHMM_XXXX (la fecha del ID es la del movimiento)
   const manualId = (local) => `MAN_${local.slice(0, 10).replace(/-/g, '')}_${local.slice(11, 16).replace(':', '')}_${rand4()}`;
-
-  const manual = { mode: 'efectivo' };
-  const MODES = [['efectivo', 'Efectivo'], ['consumo', 'Consumo tarjeta'], ['pago', 'Pago tarjeta']];
-  const field = (label, el) => h('label', { class: 'block text-sm text-slate-300' }, label, h('div', { class: 'mt-1' }, el));
-  const catSelect = (tipo = 'Egreso') => {
-    const sel = h('select', { class: INPUT });
-    sel.refill = (t) => {
-      const prev = sel.value;
-      sel.replaceChildren(h('option', { value: '' }, 'Sin categoría (irá al Inbox)'), ...catsFor(t).map((c) => h('option', { value: c }, catLabel(c))));
-      sel.value = catsFor(t).includes(prev) ? prev : '';
-    };
-    sel.refill(tipo);
-    return sel;
-  };
-  const optSelect = (list) => h('select', { class: INPUT, required: true }, list.map((x) => h('option', { value: x }, x)));
-
-  /**
-   * Arma un formulario. El ID inmutable se genera una vez por envío y se REUTILIZA en reintentos
-   * (misma fecha), así un doble toque o un corte de red nunca duplica el movimiento en el Sheet.
-   */
-  function buildForm({ idle, action, fecha, fields, collect, done }) {
-    let pending = null;
-    const submit = h('button', { type: 'submit', class: BTN + ' w-full' }, idle);
-    const form = h('form', { class: 'space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-4', autocomplete: 'off' }, fields, submit);
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      if (!form.reportValidity()) return;
-      if (!pending || pending.fecha !== fecha.value) pending = { fecha: fecha.value, id: manualId(fecha.value) };
-      submit.disabled = true; submit.textContent = 'Registrando…';
-      try {
-        const r = await api(action, Object.assign(collect(), { id: pending.id, fecha: fecha.value + ':00' }));
-        toast(r.duplicate ? 'Ya estaba registrado (no se duplicó).' : done(r));
-        pending = null; form.reset(); fecha.value = nowLocalInput();
-      } catch (ex) {
-        toast(errText(ex), 'err'); // se conserva `pending`: un reintento no duplica
-      } finally {
-        submit.disabled = false; submit.textContent = idle;
-      }
-    });
-    return form;
-  }
-
-  function formEfectivo() {
-    const fecha = h('input', { type: 'datetime-local', required: true, class: INPUT, value: nowLocalInput() });
-    const tipo = h('select', { class: INPUT }, h('option', { value: 'Egreso' }, 'Egreso (gasto)'), h('option', { value: 'Ingreso' }, 'Ingreso'));
-    const monto = h('input', { type: 'number', required: true, min: '0.01', max: '1000000', step: '0.01', inputmode: 'decimal', class: INPUT, placeholder: '0.00' });
-    const detalle = h('input', { type: 'text', required: true, maxlength: '120', class: INPUT, placeholder: 'Ej. Menú almuerzo' });
-    const desc = h('input', { type: 'text', maxlength: '200', class: INPUT, placeholder: 'Opcional' });
-    const cat = catSelect('Egreso');
-    tipo.addEventListener('change', () => cat.refill(tipo.value));
-    const formE = buildForm({
-      idle: 'Registrar en efectivo', action: 'addManual', fecha,
-      fields: [field('Fecha y hora', fecha), h('div', { class: 'grid grid-cols-2 gap-3' }, field('Tipo', tipo), field('Monto (S/)', monto)),
-        field('Detalle / Comercio', detalle), field('Descripción', desc), field('Categoría', cat)],
-      collect: () => ({ tipo: tipo.value, banco: 'Efectivo', monto: Number(monto.value), detalle: detalle.value.trim(), descripcion: desc.value.trim(), categoria: cat.value }),
-      done: (r) => `Registrado ${r.id}`,
-    });
-    formE.addEventListener('reset', () => setTimeout(() => cat.refill(tipo.value), 0));
-    return formE;
-  }
-
-  function formConsumo(opts) {
-    const fecha = h('input', { type: 'datetime-local', required: true, class: INPUT, value: nowLocalInput() });
-    const tarjeta = optSelect(opts.tarjetas);
-    const monto = h('input', { type: 'number', required: true, min: '0.01', max: '1000000', step: '0.01', inputmode: 'decimal', class: INPUT, placeholder: '0.00' });
-    const detalle = h('input', { type: 'text', required: true, maxlength: '120', class: INPUT, placeholder: 'Ej. Uber' });
-    const modalidad = h('select', { class: INPUT }, h('option', { value: 'Directo' }, 'Directo'), h('option', { value: 'Cuotas Sin Interes' }, 'Cuotas sin interés'));
-    const cuotas = h('input', { type: 'number', min: '2', max: '48', step: '1', inputmode: 'numeric', class: INPUT, placeholder: 'N° de cuotas' });
-    const cuotasBox = h('div', { class: 'hidden' }, field('N° de cuotas', cuotas));
-    const pagado = h('input', { type: 'checkbox', class: 'h-5 w-5 accent-emerald-500' });
-    // contenedor aparte: así `hidden` nunca compite con `flex` en el mismo elemento
-    const pagadoBox = h('div', {}, h('label', { class: 'flex items-center gap-3 text-sm text-slate-300' }, pagado, 'Ya lo pagué (consumir y matar)'));
-    const cat = catSelect();
-    modalidad.addEventListener('change', () => {
-      const isQ = modalidad.value !== 'Directo';
-      cuotasBox.classList.toggle('hidden', !isQ); pagadoBox.classList.toggle('hidden', isQ);
-      cuotas.required = isQ; if (isQ) pagado.checked = false;
-    });
-    return buildForm({
-      idle: 'Registrar consumo', action: 'addCreditConsumo', fecha,
-      fields: [h('p', { class: 'text-xs text-slate-500' }, 'Para tarjetas que no envían correo. Si el consumo ya llega por correo, no lo registres aquí: se duplicaría.'),
-        field('Fecha y hora', fecha), field('Tarjeta', tarjeta), h('div', { class: 'grid grid-cols-2 gap-3' }, field('Monto (S/)', monto), field('Modalidad', modalidad)),
-        cuotasBox, field('Detalle / Comercio', detalle), field('Categoría', cat), pagadoBox],
-      collect: () => ({ tarjeta: tarjeta.value, monto: Number(monto.value), modalidad: modalidad.value, cuotas: modalidad.value === 'Directo' ? null : Number(cuotas.value),
-        detalle: detalle.value.trim(), categoria: cat.value, pagado: pagado.checked }),
-      done: () => 'Consumo registrado en la tarjeta',
-    });
-  }
-
-  function formPago(opts) {
-    const fecha = h('input', { type: 'datetime-local', required: true, class: INPUT, value: nowLocalInput() });
-    const tarjeta = optSelect(opts.tarjetas);
-    const cuenta = optSelect(opts.cuentas);
-    const monto = h('input', { type: 'number', required: true, min: '0.01', max: '1000000', step: '0.01', inputmode: 'decimal', class: INPUT, placeholder: '0.00' });
-    return buildForm({
-      idle: 'Registrar pago de tarjeta', action: 'addPagoTarjeta', fecha,
-      fields: [h('p', { class: 'text-xs text-slate-500' }, 'Crea la salida en Débito y el abono en Crédito (partida doble). Si el pago ya llega por correo (BCP, iO, Falabella, Interbank), no lo registres aquí.'),
-        field('Fecha y hora', fecha), field('Tarjeta que pagas', tarjeta), field('Pagado desde', cuenta), field('Monto (S/)', monto)],
-      collect: () => ({ tarjeta: tarjeta.value, cuenta: cuenta.value, monto: Number(monto.value) }),
-      done: () => 'Pago registrado en Débito y en Crédito',
-    });
-  }
-
-  async function viewManual(root) {
-    root.replaceChildren(loading('Cargando…'));
-    let opts = { tarjetas: [], cuentas: ['BCP', 'Interbank', 'Efectivo'] };
-    try {
-      const r = await api('getCategories');
-      setCats(r.categories);
-      opts = { tarjetas: r.tarjetas || [], cuentas: r.cuentas || opts.cuentas };
-    } catch (e) { if (e.code === 'UNAUTHORIZED' || e.code === 'NO_CREDENTIALS') return; /* el modo Efectivo funciona igual */ }
-    renderManual(root, opts);
-  }
-
-  function renderManual(root, opts) {
-    const tabs = h('div', { class: 'mb-3 grid grid-cols-3 gap-1 rounded-xl bg-slate-900 p-1', role: 'tablist' }, MODES.map(([k, label]) => h('button', {
-      type: 'button', role: 'tab', 'aria-selected': manual.mode === k ? 'true' : 'false',
-      class: 'rounded-lg px-2 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (manual.mode === k ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'),
-      onclick: () => { manual.mode = k; renderManual(root, opts); },
-    }, label)));
-    let body;
-    if (manual.mode !== 'efectivo' && !opts.tarjetas.length) {
-      body = h('p', { class: 'rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100' }, 'No se encontraron tarjetas. Despliega la última versión del API y ejecuta fosSetupTarjetas().');
-    } else {
-      body = manual.mode === 'consumo' ? formConsumo(opts) : manual.mode === 'pago' ? formPago(opts) : formEfectivo();
-    }
-    root.replaceChildren(h('a', { href: '#movimientos', class: 'mb-2 inline-block text-sm text-slate-400 hover:text-slate-200' }, '← Movimientos'), h('h2', { class: 'mb-3 text-base font-semibold' }, 'Nuevo movimiento'), tabs, body);
-  }
-
-  /* ---------- vista: Movimientos (la hoja completa, solo lectura, para contrastar con el estado de cuenta) ---------- */
-  const histUi = { hoja: 'debito', data: {}, q: '', mes: '', cuenta: '', limit: 200 };
-  const HIST_NAMES = { debito: 'Débito', credito: 'Crédito' };
   const fmtFull = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(iso || ''); return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}` : (iso || ''); };
+  const r2 = (n) => Math.round(n * 100) / 100;
 
-  async function viewHistory(root, refetch = false) {
-    const k = histUi.hoja;
-    if (refetch || !histUi.data[k]) {
-      await swr(root, 'hist:' + k, () => api('getHistory', { hoja: k }), (d, stale) => { if (histUi.hoja === k) { histUi.data[k] = d; renderHistory(root); } },
-        { loadingText: 'Cargando movimientos…', retry: () => viewHistory(root, true) });
-      return;
-    }
-    renderHistory(root);
+  const HIST_NAMES = { debito: 'Débito', credito: 'Crédito' };
+  const MOV_KEY = 'fos.mov';
+  const mov = (() => {
+    let saved = {};
+    try { saved = JSON.parse(ls.get(MOV_KEY)) || {}; } catch { saved = {}; }
+    return {
+      hoja: saved.hoja === 'credito' ? 'credito' : 'debito', cuenta: saved.cuenta || {}, drafts: saved.drafts || {}, banco: saved.banco || {},
+      d: null, mes: '', q: '', limit: 200, drawer: false, ui: null, queue: Promise.resolve(),
+    };
+  })();
+  const saveMov = () => ls.set(MOV_KEY, JSON.stringify({ hoja: mov.hoja, cuenta: mov.cuenta, drafts: mov.drafts, banco: mov.banco }));
+  const dkey = () => `${mov.hoja}|${mov.cuenta[mov.hoja] || (mov.d && mov.d.cuenta) || ''}`;
+  const draftList = () => (mov.drafts[dkey()] = mov.drafts[dkey()] || []);
+
+  const colIdx = (d, name) => d.columns.findIndex((c) => normKey(c) === normKey(name));
+  function ensureCol(d, name) { // columnas que el servidor crea al primer uso (Comentario, Categoría): se muestran igual
+    if (colIdx(d, name) >= 0) return;
+    d.columns.push(name); d.rows.forEach((r) => r.push(null));
   }
 
-  function renderHistory(root) {
-    const d = histUi.data[histUi.hoja];
-    const col = (name) => d.columns.findIndex((c) => norm(c) === norm(name));
-    const iF = col('Fecha'), iM = col('Monto'), iB = col('Banco / Cuenta'), iT = col('Tipo');
-    const months = [...new Set(d.rows.map((r) => (r[iF] || '').slice(0, 7)).filter(Boolean))];
-    const cuentas = iB >= 0 ? [...new Set(d.rows.map((r) => r[iB]).filter(Boolean))].sort() : [];
-    if (histUi.mes && !months.includes(histUi.mes)) histUi.mes = '';
-    if (histUi.cuenta && !cuentas.includes(histUi.cuenta)) histUi.cuenta = '';
+  /* --- totales y vista previa --- */
+  const isDup = (d, r) => { const i = colIdx(d, 'Categoría'); return i >= 0 && normKey(r[i]) === 'duplicado'; };
+  function scopeTotals(d, rows) {
+    const iM = colIdx(d, 'Monto');
+    let ing = 0, egr = 0;
+    rows.forEach((r) => { const m = r[iM]; if (typeof m !== 'number' || isDup(d, r)) return; if (m > 0) ing += m; else egr += -m; });
+    return { ingresos: r2(ing), egresos: r2(egr), neto: r2(ing - egr) };
+  }
+  const draftMonto = (r) => { const n = Number(String(r.monto).replace(',', '.')); return Number.isFinite(n) && n > 0 && n <= 1000000 ? n : 0; };
+  function draftProblem(r) {
+    if (!draftMonto(r)) return 'Falta el monto';
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(r.fecha || '')) return 'Falta la fecha';
+    if (mov.hoja === 'debito') {
+      if (r.tipo === 'Pago') return r.tarjeta ? '' : 'Elige la tarjeta';
+      return r.detalle.trim() ? '' : 'Falta el detalle';
+    }
+    if (r.tipo === 'Abono') return '';
+    if (!r.detalle.trim()) return 'Falta el detalle';
+    if (r.tipo === 'Cuotas') { const c = Number(r.cuotas); if (!(Number.isInteger(c) && c >= 2 && c <= 48)) return 'Cuotas: de 2 a 48'; }
+    return '';
+  }
+  const draftSign = (r) => (r.tipo === 'Ingreso' || r.tipo === 'Abono' ? 1 : -1);
+  function draftEffect(mes) {
+    let ing = 0, egr = 0, n = 0;
+    draftList().forEach((r) => {
+      if (draftProblem(r)) return;
+      if (mes && !r.fecha.startsWith(mes)) return;
+      const m = draftMonto(r); n++;
+      if (draftSign(r) > 0) ing += m; else egr += m;
+    });
+    return { ingresos: r2(ing), egresos: r2(egr), neto: r2(ing - egr), n };
+  }
 
-    const tab = (key) => h('button', {
-      type: 'button', role: 'tab', 'aria-selected': histUi.hoja === key ? 'true' : 'false',
-      onclick: () => { histUi.hoja = key; histUi.limit = 200; viewHistory(root); },
-      class: 'rounded-lg px-4 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (histUi.hoja === key ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'),
-    }, HIST_NAMES[key]);
-    const q = h('input', { type: 'search', class: INPUT + ' sm:max-w-xs', placeholder: 'Buscar comercio, monto, ID…', value: histUi.q, 'aria-label': 'Buscar' });
-    const selMes = h('select', { class: INPUT + ' sm:w-auto', 'aria-label': 'Mes' }, h('option', { value: '' }, 'Todos los meses'),
-      months.map((m) => h('option', { value: m, selected: m === histUi.mes }, mesLabel(m))));
-    const selCta = h('select', { class: INPUT + ' sm:w-auto', 'aria-label': 'Cuenta' }, h('option', { value: '' }, histUi.hoja === 'credito' ? 'Todas las tarjetas' : 'Todas las cuentas'),
-      cuentas.map((c) => h('option', { value: c, selected: c === histUi.cuenta }, c)));
-    const info = h('p', { class: 'my-2 text-sm text-slate-400', 'aria-live': 'polite' });
-    const wrap = h('div', { class: 'max-h-[65vh] overflow-auto rounded-xl border border-slate-800 bg-slate-900' });
-    const more = h('button', { type: 'button', class: BTN_GHOST + ' mt-3 hidden', onclick: () => { histUi.limit += 200; draw(); } }, 'Mostrar más');
-
-    const ORDER = {
-      debito: ['fecha', 'banco / cuenta', 'tipo', 'detalle/comercio', 'descripcion', 'categoria', 'monto'],
-      credito: ['fecha', 'banco / cuenta', 'detalle/comercio', 'tipo', 'modalidad', 'n° cuotas', 'monto cuota', 'monto', 'estado', 'pagado', 'categoria'],
-    }[histUi.hoja] || [];
-    const order = [];
-    ORDER.forEach((n) => { const i = col(n); if (i >= 0) order.push(i); });
-    d.columns.forEach((c, i) => { if (!order.includes(i) && norm(c) !== 'id') order.push(i); }); // el ID no se muestra (sigue siendo buscable)
-    const isNum = (i) => ['monto', 'monto cuota', 'n° cuotas'].includes(norm(d.columns[i]));
-
-    const cell = (v, i) => {
-      const name = norm(d.columns[i]);
-      const td = (cls, txt) => h('td', { class: 'whitespace-nowrap px-3 py-2 ' + cls }, txt);
-      if (v === null || v === '') return td('text-slate-700', '·');
-      if (i === iF) return td('tabular-nums text-slate-300', fmtFull(v));
-      if (typeof v === 'number') return td('text-right tabular-nums ' + (i === iM ? (v < 0 ? 'text-rose-300' : 'text-emerald-300') : 'text-slate-300'), i === iM || name.includes('monto') ? fmtMoney(v) : String(v));
-      if (typeof v === 'boolean') return td('text-center ' + (v ? 'text-emerald-300' : 'text-slate-600'), v ? '✓' : '·');
-      if (name === 'id') return td('text-xs text-slate-500', v);
-      return td('text-slate-200', name === 'categoria' ? catLabel(v) : v);
+  /* --- carga --- */
+  async function viewHistory(root, refetch = false) {
+    const k = mov.hoja, want = mov.cuenta[k] || '';
+    const fetcher = async () => {
+      try { return await api('getHistory', want ? { hoja: k, cuenta: want } : { hoja: k }); } catch (e) {
+        if (want && e.code === 'BAD_CUENTA') { mov.cuenta[k] = ''; return api('getHistory', { hoja: k }); }
+        throw e;
+      }
     };
+    const paint = (d) => {
+      if (mov.hoja !== k) return;
+      ensureCol(d, 'Comentario'); if (k === 'credito') ensureCol(d, 'Categoría');
+      setCats(d.categories || state.cats);
+      mov.d = d; mov.cuenta[k] = d.cuenta || ''; saveMov();
+      if (mov.ui && mov.ui.root === root && root.contains(mov.ui.el)) mov.ui.refresh(); else buildMov(root);
+    };
+    if (refetch) cacheClear();
+    await swr(root, `mov:${k}:${want}`, fetcher, (d) => paint(d), { loadingText: 'Cargando movimientos…', retry: () => viewHistory(root, true) });
+  }
 
-    function draw() {
-      const needle = norm(histUi.q);
-      const rows = d.rows.filter((r) =>
-        (!histUi.mes || (r[iF] || '').startsWith(histUi.mes)) && (!histUi.cuenta || r[iB] === histUi.cuenta) &&
-        (!needle || norm(r.map((v) => (v == null ? '' : v)).join(' ')).includes(needle)));
-      const shown = rows.slice(0, histUi.limit);
-      const sum = (f) => Math.round(rows.reduce((s, r) => s + (typeof r[iM] === 'number' && f(r[iM]) ? r[iM] : 0), 0) * 100) / 100;
-      info.replaceChildren(...[`${rows.length} fila(s)`, iM >= 0 ? [' · entradas ', h('b', { class: 'text-emerald-300' }, fmtMoney(sum((v) => v > 0))), ' · salidas ', h('b', { class: 'text-rose-300' }, fmtMoney(sum((v) => v < 0))), ' · neto ', h('b', { class: 'text-slate-200' }, fmtMoney(sum(() => true)))] : '',
-        d.truncated ? ` · (la hoja tiene ${d.total}, se cargan las ${d.rows.length} más recientes)` : ''].flat());
+  const MOV_COLS = {
+    debito: [['fecha', 'Fecha', 'Fecha', 'dt'], ['detalle', 'Detalle', 'Detalle/Comercio', 'text'], ['desc', 'Descripción', 'Descripción', 'ro'], ['categoria', 'Categoría', 'Categoría', 'cat'],
+      ['monto', 'Monto', 'Monto', 'money'], ['comentario', 'Comentario', 'Comentario', 'text']],
+    credito: [['fecha', 'Fecha', 'Fecha', 'dt'], ['detalle', 'Detalle', 'Detalle/Comercio', 'text'], ['modalidad', 'Modalidad', 'Modalidad', 'ro'], ['cuotas', 'Cuotas', 'N° Cuotas', 'ro'],
+      ['categoria', 'Categoría', 'Categoría', 'cat'], ['monto', 'Monto', 'Monto', 'money'], ['estado', 'Estado', 'Estado', 'estado'], ['pagado', 'Pagado', 'Pagado', 'bool'], ['comentario', 'Comentario', 'Comentario', 'text']],
+  };
+
+  function movToast(e) { toast(e.code === 'CONFLICT' ? 'Ese dato cambió en la hoja mientras lo editabas. Recargué para que veas el actual.' : errText(e), 'err'); }
+  Object.assign(ERR_TEXT, {
+    CONFLICT: 'Ese dato cambió en la hoja. Recarga para ver el actual.', PAGO_LINKED: 'Es un pago de tarjeta (partida doble): solo se puede comentar.',
+    UNKNOWN_CATEGORY: 'Esa categoría no existe: créala en Categorías.', TIPO_MISMATCH: 'La categoría no corresponde a un ingreso/egreso de ese monto.',
+    BAD_CUENTA: 'Cuenta no reconocida.', BAD_CATEGORIA: 'Categoría no permitida.', BAD_AMOUNT: 'Monto inválido.', BAD_ESTADO: 'Estado inválido.',
+  });
+
+  function buildMov(root) {
+    const d = () => mov.d;
+    const tilesBox = h('div', { class: 'mb-3 grid grid-cols-3 gap-2' });
+    const info = h('p', { class: 'my-2 text-sm text-slate-400', 'aria-live': 'polite' });
+    const wrap = h('div', { class: 'max-h-[62vh] overflow-auto rounded-xl border border-slate-800 bg-slate-900' });
+    const more = h('button', { type: 'button', class: BTN_GHOST + ' mt-3 hidden', onclick: () => { mov.limit += 200; drawTable(); } }, 'Mostrar más');
+    const controls = h('div', { class: 'mb-3 space-y-2' });
+    const drawerBox = h('div', {});
+    const el = h('div', { class: mov.drawer ? 'md:mr-[31rem]' : '' }, controls, tilesBox, info, wrap, more);
+    root.replaceChildren(el, drawerBox);
+    mov.ui = { root, el, refresh };
+
+    /* ---- controles ---- */
+    function drawControls() {
+      const D = d();
+      const tab = (key) => h('button', {
+        type: 'button', role: 'tab', 'aria-selected': mov.hoja === key ? 'true' : 'false',
+        onclick: () => { if (mov.hoja === key) return; mov.hoja = key; mov.mes = ''; mov.q = ''; mov.limit = 200; saveMov(); mov.d = null; viewHistory(root); },
+        class: 'rounded-lg px-4 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (mov.hoja === key ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'),
+      }, HIST_NAMES[key]);
+      const selCta = h('select', { class: INPUT + ' sm:w-auto font-semibold', 'aria-label': mov.hoja === 'credito' ? 'Tarjeta' : 'Cuenta' },
+        D.cuentas.map((c) => h('option', { value: c.nombre, selected: c.nombre === D.cuenta }, `${c.nombre} (${c.n})`)));
+      selCta.addEventListener('change', () => { mov.cuenta[mov.hoja] = selCta.value; mov.mes = ''; mov.limit = 200; saveMov(); viewHistory(root); });
+      const months = [...new Set(D.rows.map((r) => (r[colIdx(D, 'Fecha')] || '').slice(0, 7)).filter(Boolean))];
+      if (mov.mes && !months.includes(mov.mes)) mov.mes = '';
+      const selMes = h('select', { class: INPUT + ' sm:w-auto', 'aria-label': 'Mes' }, h('option', { value: '' }, 'Todo el historial'),
+        months.map((m) => h('option', { value: m, selected: m === mov.mes }, mesLabel(m))));
+      selMes.addEventListener('change', () => { mov.mes = selMes.value; mov.limit = 200; drawTiles(); drawTable(); });
+      const q = h('input', { type: 'search', class: INPUT + ' sm:max-w-xs', placeholder: 'Buscar comercio, monto…', value: mov.q, 'aria-label': 'Buscar' });
+      q.addEventListener('input', () => { mov.q = q.value; mov.limit = 200; drawTiles(); drawTable(); });
+      controls.replaceChildren(
+        h('div', { class: 'flex flex-wrap items-center justify-between gap-2' },
+          h('div', { role: 'tablist', class: 'flex gap-1 rounded-xl bg-slate-900 p-1' }, tab('debito'), tab('credito')),
+          h('div', { class: 'flex gap-2' },
+            h('button', { type: 'button', class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewHistory(root, true) }, 'Actualizar'),
+            h('button', { type: 'button', 'data-act': 'drawer', class: BTN + ' !px-3 !py-1.5', onclick: () => toggleDrawer(!mov.drawer) }, mov.drawer ? 'Cerrar panel' : '+ Cargar varios'))),
+        h('div', { class: 'flex flex-col gap-2 sm:flex-row' }, selCta, selMes, q));
+    }
+
+    /* ---- tiles: Débito = Ingresos / Egresos / Neto · Crédito = Ingresos / Egresos / Saldo disponible ---- */
+    function scopeRows() {
+      const D = d(), iF = colIdx(D, 'Fecha'), needle = normKey(mov.q);
+      return D.rows.filter((r) => (!mov.mes || (r[iF] || '').startsWith(mov.mes)) && (!needle || normKey(r.map((v) => (v == null ? '' : v)).join(' ')).includes(needle)));
+    }
+    function drawTiles() {
+      const D = d(), cred = mov.hoja === 'credito';
+      const filtered = !!(mov.mes || mov.q);
+      const base = filtered && !D.truncated ? scopeTotals(D, scopeRows()) : D.totales;
+      const fx = draftEffect(mov.mes);
+      const tile = (label, v, after, tone, note) => h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-3' },
+        h('p', { class: 'text-xs text-slate-400' }, label),
+        h('p', { class: 'mt-1 text-lg font-semibold tabular-nums sm:text-xl ' + tone }, fmtMoney(v)),
+        after != null && fx.n ? h('p', { class: 'text-xs tabular-nums text-amber-300' }, `quedaría ${fmtMoney(after)}`) : null,
+        note ? h('p', { class: 'text-[11px] text-slate-500' }, note) : null);
+      const third = cred ? D.totales.saldo : base.neto;
+      const thirdFx = cred ? D.totales.saldo + (fx.ingresos - fx.egresos) : base.neto + (fx.ingresos - fx.egresos);
+      const hasFx = (mov.mes ? fx : draftEffect('')).n;
+      tilesBox.replaceChildren(
+        tile('Ingresos', base.ingresos, base.ingresos + fx.ingresos, 'text-emerald-300', filtered ? (mov.mes ? mesLabel(mov.mes) : 'con tu búsqueda') : 'todo el historial'),
+        tile('Egresos', base.egresos, base.egresos + fx.egresos, 'text-rose-300', filtered ? (mov.mes ? mesLabel(mov.mes) : 'con tu búsqueda') : 'todo el historial'),
+        tile(cred ? 'Saldo disponible' : 'Neto', third, hasFx ? thirdFx : null, third < 0 ? 'text-rose-300' : 'text-slate-100', cred ? 'actual de la tarjeta' : (filtered ? 'ingresos − egresos' : 'ingresos − egresos')));
+    }
+
+    /* ---- tabla editable ---- */
+    const rowById = (id) => { const D = d(), iI = colIdx(D, 'ID'); return D.rows.find((r) => String(r[iI]) === id); };
+    function enqueue(job) { mov.queue = mov.queue.then(job, job); return mov.queue; }
+
+    function saveCell(row, key, newLocal, payloadVal, oldPayloadVal) {
+      const D = d(), iI = colIdx(D, 'ID'), id = String(row[iI]);
+      const cdef = MOV_COLS[mov.hoja].find((c) => c[0] === key);
+      const idx = colIdx(D, cdef[2]);
+      const before = row[idx], beforeTipo = colIdx(D, 'Tipo') >= 0 ? row[colIdx(D, 'Tipo')] : undefined;
+      row[idx] = newLocal;
+      if (key === 'monto' && mov.hoja === 'debito' && colIdx(D, 'Tipo') >= 0) row[colIdx(D, 'Tipo')] = newLocal < 0 ? 'Egreso' : 'Ingreso';
+      if (key === 'fecha') D.rows.sort((a, b) => String(b[colIdx(D, 'Fecha')] || '').localeCompare(String(a[colIdx(D, 'Fecha')] || '')));
+      recompute(); drawTiles(); drawTable();
+      return enqueue(async () => {
+        try {
+          await api('updateMovimiento', { hoja: mov.hoja, id, cambios: { [key]: payloadVal }, expect: { [key]: oldPayloadVal } });
+        } catch (e) {
+          row[idx] = before; if (beforeTipo !== undefined) row[colIdx(D, 'Tipo')] = beforeTipo;
+          recompute(); drawTiles(); drawTable();
+          movToast(e);
+          if (e.code === 'CONFLICT') viewHistory(root, true);
+        }
+      });
+    }
+    function recompute() { const D = d(); if (!D.truncated) D.totales = Object.assign({}, D.totales, scopeTotals(D, D.rows), { saldo: scopeTotals(D, D.rows).neto }); }
+
+    function editable(td, { display, edit, locked }) {
+      if (locked) { td.classList.add('text-slate-500'); td.title = 'Bloqueado: pago de tarjeta (partida doble)'; return td; }
+      td.tabIndex = 0; td.classList.add('cursor-text', 'hover:bg-slate-800', 'focus:outline-none', 'focus-visible:ring-1', 'focus-visible:ring-emerald-400');
+      const go = () => edit(td);
+      td.addEventListener('click', (e) => { if (!td.querySelector('input,select')) go(e); });
+      td.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !td.querySelector('input,select')) { e.preventDefault(); go(e); } });
+      return td;
+    }
+    function inlineInput(td, { type, value, onCommit, attrs = {} }) {
+      const inp = h('input', Object.assign({ type, value, class: 'w-full min-w-[7rem] rounded border border-emerald-500 bg-slate-950 px-2 py-1 text-sm text-slate-100 focus:outline-none' }, attrs));
+      let done = false;
+      const finish = (ok) => { if (done) return; done = true; if (ok && inp.value !== value) onCommit(inp.value); else drawTable(); };
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); finish(false); } });
+      inp.addEventListener('blur', () => finish(true));
+      td.replaceChildren(inp); inp.focus(); if (type === 'text') inp.select();
+    }
+    function cell(r, c) {
+      const D = d(), [key, , header, kind] = c, i = colIdx(D, header);
+      const v = i >= 0 ? r[i] : null, iI = colIdx(D, 'ID'), hasId = !!(iI >= 0 && r[iI]);
+      const catIdx = colIdx(D, 'Categoría'), isPago = catIdx >= 0 && normKey(r[catIdx]) === 'pago tarjeta';
+      const td = h('td', { class: 'whitespace-nowrap px-3 py-2 ' });
+      const blank = v === null || v === '';
+      const dim = isDup(D, r) ? ' line-through opacity-60' : '';
+      const lockedBase = !hasId;
+      if (kind === 'ro') { td.className += 'text-slate-400' + dim; td.textContent = blank ? '·' : String(v); return td; }
+      if (kind === 'bool') {
+        td.className += 'text-center';
+        const cb = h('input', { type: 'checkbox', class: 'h-4 w-4 accent-emerald-500', 'aria-label': 'Pagado', disabled: lockedBase || normKey(r[colIdx(D, 'Tipo')]) !== 'egreso' });
+        cb.checked = v === true;
+        cb.addEventListener('change', () => saveCell(r, key, cb.checked, cb.checked, v === true));
+        td.append(cb); return td;
+      }
+      if (kind === 'estado') {
+        const pend = normKey(v) === 'pendiente';
+        const b = h('button', { type: 'button', disabled: lockedBase || blank, title: pend ? 'Marcar como procesado' : 'Volver a pendiente',
+          class: 'rounded-full px-2 py-0.5 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (pend ? 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30' : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25') }, blank ? '·' : String(v));
+        b.addEventListener('click', () => { const nuevo = pend ? 'Procesado' : 'Pendiente'; saveCell(r, key, nuevo, nuevo, v == null ? '' : String(v)); });
+        td.append(b); return td;
+      }
+      if (kind === 'dt') {
+        td.className += 'tabular-nums text-slate-300' + dim; td.textContent = fmtFull(v);
+        return editable(td, { locked: lockedBase || isPago, edit: () => inlineInput(td, { type: 'datetime-local', value: (v || '').slice(0, 16),
+          onCommit: (nv) => { if (!nv) return drawTable(); saveCell(r, key, nv + ':00', nv, v); } }) });
+      }
+      if (kind === 'money') {
+        const neg = typeof v === 'number' && v < 0;
+        td.className += 'text-right tabular-nums ' + (neg ? 'text-rose-300' : 'text-emerald-300') + dim; td.textContent = typeof v === 'number' ? fmtMoney(v) : '·';
+        td.title = 'Escribe el monto; con + o − al inicio cambias el signo';
+        return editable(td, { locked: lockedBase || isPago, edit: () => inlineInput(td, { type: 'text', value: String(v ?? ''), attrs: { inputmode: 'decimal', class: 'w-24 rounded border border-emerald-500 bg-slate-950 px-2 py-1 text-right text-sm text-slate-100 focus:outline-none' },
+          onCommit: (nv) => {
+            const s = nv.replace(/[^\d.,+\-]/g, '').replace(',', '.'); const n = Math.abs(Number(s.replace(/^[+-]/, '')));
+            if (!Number.isFinite(n) || n === 0 || n > 1000000) { toast('Monto inválido.', 'err'); return drawTable(); }
+            const sign = s.startsWith('+') ? 1 : s.startsWith('-') ? -1 : (typeof v === 'number' && v < 0 ? -1 : 1);
+            const val = r2(sign * n);
+            if (val === v) return drawTable();
+            saveCell(r, key, val, val, v);
+          } }) });
+      }
+      if (kind === 'cat') {
+        td.className += 'text-slate-200' + dim; td.textContent = blank ? '·' : catLabel(v);
+        if (blank) td.className = td.className.replace('text-slate-200', 'text-slate-600');
+        return editable(td, { locked: lockedBase || isPago, edit: () => {
+          const m = r[colIdx(D, 'Monto')];
+          const tipo = typeof m === 'number' && m > 0 ? 'Ingreso' : 'Egreso';
+          const list = catsFor(tipo);
+          const sel = h('select', { class: 'rounded border border-emerald-500 bg-slate-950 px-2 py-1 text-sm text-slate-100 focus:outline-none' },
+            h('option', { value: '' }, '— Sin categoría'),
+            ...[...new Set([...(v && !list.includes(v) && normKey(v) !== 'duplicado' ? [v] : []), ...list])].map((x) => h('option', { value: x, selected: x === v }, catLabel(x))),
+            mov.hoja === 'debito' ? h('option', { value: 'Duplicado', selected: normKey(v) === 'duplicado' }, '♻️ Duplicado') : null);
+          if (!v) sel.value = '';
+          let done = false;
+          sel.addEventListener('change', () => { done = true; const nv = sel.value; if (nv === (v || '')) drawTable(); else saveCell(r, key, nv || null, nv, v == null ? '' : String(v)); });
+          sel.addEventListener('blur', () => { if (!done) drawTable(); });
+          td.replaceChildren(sel); sel.focus();
+        } });
+      }
+      // texto libre: detalle / comentario
+      td.className += (key === 'comentario' ? 'text-slate-400 ' : 'text-slate-200 ') + dim;
+      if (key === 'detalle' && td.className) td.className += ' max-w-[18rem] truncate';
+      td.textContent = blank ? (key === 'comentario' ? '＋ comentario' : '·') : String(v);
+      if (blank) td.className += ' text-slate-600';
+      const canEdit = !lockedBase && !(isPago && key !== 'comentario');
+      return editable(td, { locked: !canEdit, edit: () => inlineInput(td, { type: 'text', value: v == null ? '' : String(v), attrs: { maxlength: key === 'detalle' ? '120' : '200', placeholder: key === 'comentario' ? 'Comentario' : '' },
+        onCommit: (nv) => {
+          const t = nv.trim();
+          if (key === 'detalle' && !t) { toast('El detalle no puede quedar vacío.', 'err'); return drawTable(); }
+          if (/^[=+\-@]/.test(t)) { toast('No puede empezar con = + - @', 'err'); return drawTable(); }
+          saveCell(r, key, t || null, t, v == null ? '' : String(v));
+        } }) });
+    }
+    function drawTable() {
+      const D = d(), rows = scopeRows(), shown = rows.slice(0, mov.limit);
+      const cols = MOV_COLS[mov.hoja].filter((c) => !(mov.drawer && c[3] === 'ro') && (c[3] === 'cat' || c[3] === 'money' || colIdx(D, c[2]) >= 0 || c[0] === 'comentario'));
+      const sc = scopeTotals(D, rows);
+      info.replaceChildren(...[`${rows.length} fila(s) de ${D.cuenta}`, rows.length === D.rows.length ? '' : ` (de ${D.total} en total)`,
+        D.truncated ? ` · se cargan las ${D.rows.length} más recientes` : '', ' · ', h('span', { class: 'text-slate-500' }, 'toca una celda para editarla'),
+        mov.q || mov.mes ? [' · ', 'entradas ', h('b', { class: 'text-emerald-300' }, fmtMoney(sc.ingresos)), ' · salidas ', h('b', { class: 'text-rose-300' }, fmtMoney(sc.egresos))] : ''].flat());
       wrap.replaceChildren(rows.length ? h('table', { class: 'w-full text-sm' },
-        h('thead', {}, h('tr', {}, order.map((i) => h('th', { class: 'sticky top-0 z-10 whitespace-nowrap bg-slate-800 px-3 py-2 font-medium text-slate-300 ' + (isNum(i) ? 'text-right' : 'text-left') }, d.columns[i])))),
-        h('tbody', {}, shown.map((r) => h('tr', { class: 'border-t border-slate-800 hover:bg-slate-800/60' }, order.map((i) => cell(r[i], i))))))
-        : h('p', { class: 'p-8 text-center text-sm text-slate-500' }, 'Sin resultados.'));
+        h('thead', {}, h('tr', {}, cols.map((c) => h('th', { class: 'sticky top-0 z-10 whitespace-nowrap bg-slate-800 px-3 py-2 font-medium text-slate-300 ' + (c[3] === 'money' ? 'text-right' : c[3] === 'bool' ? 'text-center' : 'text-left') }, c[1])))),
+        h('tbody', {}, shown.map((r) => h('tr', { class: 'border-t border-slate-800 hover:bg-slate-800/40' }, cols.map((c) => cell(r, c))))))
+        : h('p', { class: 'p-8 text-center text-sm text-slate-500' }, mov.q || mov.mes ? 'Sin resultados.' : 'Esta cuenta aún no tiene movimientos: usa «+ Cargar varios».'));
       more.classList.toggle('hidden', rows.length <= shown.length);
     }
-    q.addEventListener('input', () => { histUi.q = q.value; histUi.limit = 200; draw(); });
-    selMes.addEventListener('change', () => { histUi.mes = selMes.value; histUi.limit = 200; draw(); });
-    selCta.addEventListener('change', () => { histUi.cuenta = selCta.value; histUi.limit = 200; draw(); });
 
-    root.replaceChildren(
-      h('div', { class: 'mb-3 flex flex-wrap items-center justify-between gap-2' },
-        h('div', { role: 'tablist', class: 'flex gap-1 rounded-xl bg-slate-900 p-1' }, tab('debito'), tab('credito')),
-        h('div', { class: 'flex gap-2' },
-          h('button', { type: 'button', class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewHistory(root, true) }, 'Actualizar'),
-          h('a', { href: '#nuevo', class: BTN + ' !px-3 !py-1.5' }, '+ Nuevo'))),
-      h('div', { class: 'flex flex-col gap-2 sm:flex-row' }, q, selMes, selCta),
-      info, wrap, more);
-    draw();
+    /* ---- panel para cargar varios movimientos (derecha en PC, abajo en el celular) ---- */
+    function newDraft() {
+      const list = draftList(), last = list[list.length - 1], f = last ? last.fecha : nowLocalInput();
+      const base = { id: manualId(f), fecha: f, monto: '', detalle: '', categoria: '', comentario: '', err: '' };
+      return mov.hoja === 'debito' ? Object.assign(base, { tipo: last ? last.tipo : 'Egreso', tarjeta: last ? last.tarjeta : '' })
+        : Object.assign(base, { tipo: last ? last.tipo : 'Directo', cuotas: '', pagado: false });
+    }
+    function toggleDrawer(on) {
+      mov.drawer = on;
+      if (on && !draftList().length) draftList().push(newDraft());
+      el.className = on ? 'md:mr-[31rem]' : '';
+      drawControls(); drawDrawer();
+    }
+    const TIPOS = { debito: [['Egreso', 'Egreso'], ['Ingreso', 'Ingreso'], ['Pago', 'Pago de tarjeta']], credito: [['Directo', 'Consumo directo'], ['Cuotas', 'Consumo en cuotas'], ['Abono', 'Abono / ingreso']] };
+    const SMALL = 'rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-emerald-400 focus:outline-none';
+    function drawDrawer() {
+      if (!mov.drawer) { drawerBox.replaceChildren(); return; }
+      const D = d(), list = draftList(), cred = mov.hoja === 'credito';
+      const pv = h('div', { class: 'rounded-lg bg-slate-800/70 p-2 text-xs tabular-nums', 'aria-live': 'polite' });
+      const bancoIn = h('input', { type: 'number', step: '0.01', inputmode: 'decimal', class: SMALL + ' w-28 text-right', placeholder: '0.00', 'aria-label': 'Saldo en la app del banco', value: mov.banco[dkey()] ?? '' });
+      const cuadre = h('span', { class: 'text-xs' });
+      function preview() {
+        const fx = draftEffect('');
+        const T = D.totales, saldo = cred ? T.saldo : T.neto, saldoFx = r2(saldo + fx.ingresos - fx.egresos);
+        pv.replaceChildren(...[
+          h('div', { class: 'flex flex-wrap gap-x-4 gap-y-1' },
+            h('span', {}, 'Ingresos ', h('b', { class: 'text-emerald-300' }, fmtMoney(T.ingresos)), fx.n ? [' → ', h('b', { class: 'text-amber-300' }, fmtMoney(r2(T.ingresos + fx.ingresos)))] : ''),
+            h('span', {}, 'Egresos ', h('b', { class: 'text-rose-300' }, fmtMoney(T.egresos)), fx.n ? [' → ', h('b', { class: 'text-amber-300' }, fmtMoney(r2(T.egresos + fx.egresos)))] : ''),
+            h('span', {}, cred ? 'Disponible ' : 'Neto ', h('b', { class: 'text-slate-100' }, fmtMoney(saldo)), fx.n ? [' → ', h('b', { class: 'text-amber-300' }, fmtMoney(saldoFx))] : '')),
+          fx.n ? h('p', { class: 'mt-1 text-[11px] text-slate-400' }, `${fx.n} fila(s) válida(s) sin registrar`) : null].filter(Boolean));
+        const raw = bancoIn.value.trim();
+        if (raw === '' || !Number.isFinite(Number(raw))) { cuadre.textContent = ''; return; }
+        const diff = r2(Number(raw) - saldoFx);
+        cuadre.className = 'text-xs font-semibold ' + (diff === 0 ? 'text-emerald-300' : 'text-amber-300');
+        cuadre.textContent = diff === 0 ? '✓ cuadra con tu app' : `diferencia ${fmtMoney(diff)} (app − sistema)`;
+      }
+      bancoIn.addEventListener('input', () => { mov.banco[dkey()] = bancoIn.value; saveMov(); preview(); });
+
+      const rowsBox = h('div', { class: 'space-y-2' });
+      function addRow(focus) {
+        list.push(newDraft()); saveMov(); drawRows(); drawTiles(); preview();
+        if (focus) { const last = rowsBox.lastElementChild; const f = last && last.querySelector('[data-f=monto]'); if (f) f.focus(); }
+      }
+      function drawRows() {
+        rowsBox.replaceChildren(...list.map((r, n) => draftEl(r, n)));
+      }
+      function touch() { saveMov(); drawTiles(); preview(); }
+      function draftEl(r, n) {
+        const wrapEl = h('div', { class: 'rounded-lg border bg-slate-900 p-2 ' + (r.err ? 'border-rose-500/60' : 'border-slate-700') });
+        const inp = (prop, type, cls, attrs = {}) => {
+          const i = h('input', Object.assign({ type, class: SMALL + ' ' + cls, value: r[prop] ?? '', 'data-f': prop }, attrs));
+          i.addEventListener('input', () => { r[prop] = i.value; r.err = ''; touch(); });
+          if (type === 'text') i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (n === list.length - 1) addRow(true); } });
+          return i;
+        };
+        const tipo = h('select', { class: SMALL, 'aria-label': 'Tipo' }, TIPOS[mov.hoja].map(([v, l]) => h('option', { value: v, selected: v === r.tipo }, l)));
+        tipo.addEventListener('change', () => { r.tipo = tipo.value; if (r.tipo === 'Pago' || r.tipo === 'Abono') r.categoria = ''; r.err = ''; saveMov(); wrapEl.replaceWith(draftEl(r, n)); drawTiles(); preview(); });
+        const catTipo = draftSign(r) > 0 ? 'Ingreso' : 'Egreso';
+        const cat = h('select', { class: SMALL + ' min-w-0 flex-1', 'aria-label': 'Categoría' }, h('option', { value: '' }, 'Sin categoría'),
+          catsFor(catTipo).map((c) => h('option', { value: c, selected: c === r.categoria }, catLabel(c))));
+        cat.addEventListener('change', () => { r.categoria = cat.value; saveMov(); });
+        const del = h('button', { type: 'button', class: 'rounded-md px-2 text-slate-400 hover:bg-slate-800 hover:text-rose-300', 'aria-label': 'Quitar fila', onclick: () => { list.splice(n, 1); if (!list.length) list.push(newDraft()); saveMov(); drawRows(); drawTiles(); preview(); } }, '✕');
+        const noCat = r.tipo === 'Pago' || r.tipo === 'Abono';
+        const tarjetas = (D.tarjetas || []);
+        const second = r.tipo === 'Pago'
+          ? h('select', { class: SMALL + ' min-w-0 flex-1', 'aria-label': 'Tarjeta que pagas' }, h('option', { value: '' }, 'Tarjeta que pagas…'), tarjetas.map((t) => h('option', { value: t, selected: t === r.tarjeta }, t)))
+          : inp('detalle', 'text', 'min-w-0 flex-1', { placeholder: r.tipo === 'Abono' ? 'Detalle (opcional)' : 'Detalle / comercio', maxlength: '120' });
+        if (r.tipo === 'Pago') second.addEventListener('change', () => { r.tarjeta = second.value; r.err = ''; touch(); });
+        wrapEl.append(...[
+          h('div', { class: 'flex items-center gap-2' }, inp('fecha', 'datetime-local', 'min-w-0 flex-1'), del),
+          h('div', { class: 'mt-2 flex items-center gap-2' }, tipo, inp('monto', 'text', 'w-28 text-right', { inputmode: 'decimal', placeholder: '0.00' })),
+          h('div', { class: 'mt-2 flex' }, second),
+          h('div', { class: 'mt-2 flex flex-wrap items-center gap-2' }, noCat ? null : cat,
+            cred && r.tipo === 'Cuotas' ? inp('cuotas', 'number', 'w-20', { min: '2', max: '48', placeholder: 'cuotas' }) : null,
+            cred && r.tipo === 'Directo' ? h('label', { class: 'flex items-center gap-1 whitespace-nowrap text-xs text-slate-300' }, (() => { const c = h('input', { type: 'checkbox', class: 'h-4 w-4 accent-emerald-500' }); c.checked = !!r.pagado; c.addEventListener('change', () => { r.pagado = c.checked; saveMov(); }); return c; })(), 'ya pagado') : null,
+            inp('comentario', 'text', 'min-w-[8rem] flex-1', { placeholder: 'Comentario', maxlength: '200' })),
+          r.err ? h('p', { class: 'mt-1 text-xs text-rose-300' }, r.err) : null,
+        ].filter(Boolean));
+        return wrapEl;
+      }
+
+      async function register() {
+        const todo = list.filter((r) => !draftProblem(r));
+        list.forEach((r) => { r.err = draftProblem(r); });
+        if (!todo.length) { drawRows(); toast('Completa al menos una fila (monto y detalle).', 'err'); return; }
+        btn.disabled = true; btn.textContent = 'Registrando…';
+        let added = 0, dup = 0, failed = 0;
+        try {
+          const payload = (r) => (cred
+            ? { id: r.id, fecha: r.fecha, tipo: r.tipo === 'Abono' ? 'Ingreso' : 'Egreso', monto: draftMonto(r), detalle: r.detalle.trim(), categoria: r.categoria, comentario: r.comentario.trim(), modalidad: r.tipo === 'Cuotas' ? 'Cuotas Sin Interes' : 'Directo', cuotas: r.tipo === 'Cuotas' ? Number(r.cuotas) : null, pagado: r.tipo === 'Directo' && !!r.pagado }
+            : { id: r.id, fecha: r.fecha, tipo: r.tipo === 'Ingreso' ? 'Ingreso' : 'Egreso', monto: draftMonto(r), detalle: r.tipo === 'Pago' ? '' : r.detalle.trim(), categoria: r.categoria, comentario: r.comentario.trim(), tarjeta: r.tipo === 'Pago' ? r.tarjeta : undefined });
+          for (let i = 0; i < todo.length; i += 50) {
+            const chunk = todo.slice(i, i + 50);
+            const res = await api('addMovimientos', { hoja: mov.hoja, cuenta: D.cuenta, rows: chunk.map(payload) });
+            res.results.forEach((x, k) => {
+              const r = chunk[k];
+              if (x.ok) { x.duplicate ? dup++ : added++; r.done = true; } else { failed++; r.err = x.message || x.error; }
+            });
+          }
+        } catch (e) { toast(errText(e), 'err'); }
+        mov.drafts[dkey()] = list.filter((r) => !r.done);
+        if (!mov.drafts[dkey()].length) mov.drafts[dkey()].push(newDraft());
+        saveMov();
+        toast(`${added} registrado(s)${dup ? `, ${dup} ya estaban` : ''}${failed ? `, ${failed} con error (revísalas)` : ''}`, failed ? 'err' : 'ok');
+        await viewHistory(root, true);
+      }
+      const btn = h('button', { type: 'button', class: BTN + ' w-full', onclick: register }, 'Registrar todo');
+      const count = () => list.filter((r) => !draftProblem(r)).length;
+      const panel = h('aside', { 'aria-label': 'Cargar movimientos', class: 'fixed inset-x-0 bottom-0 z-40 flex max-h-[85vh] flex-col rounded-t-2xl border border-slate-700 bg-slate-950 shadow-2xl md:inset-y-0 md:left-auto md:right-0 md:max-h-none md:w-[30rem] md:rounded-none md:border-y-0 md:border-r-0' },
+        h('div', { class: 'flex items-center justify-between border-b border-slate-800 px-4 py-3' },
+          h('div', {}, h('h2', { class: 'text-sm font-semibold' }, `Cargar movimientos · ${D.cuenta}`), h('p', { class: 'text-xs text-slate-400' }, 'Ve anotando fila por fila y registra todo de una vez.')),
+          h('button', { type: 'button', class: 'rounded-md px-2 py-1 text-slate-300 hover:bg-slate-800', 'aria-label': 'Cerrar panel', onclick: () => toggleDrawer(false) }, '✕')),
+        h('div', { class: 'space-y-3 overflow-y-auto px-4 py-3' }, pv,
+          h('div', { class: 'flex flex-wrap items-center gap-2 text-xs text-slate-300' }, h('label', { for: 'banco-in' }, 'Saldo en tu app del banco'), bancoIn, cuadre),
+          rowsBox,
+          h('div', { class: 'flex gap-2' },
+            h('button', { type: 'button', class: BTN_GHOST + ' flex-1', onclick: () => addRow(true) }, '+ Fila'),
+            h('button', { type: 'button', class: BTN_GHOST, onclick: () => { if (list.some((r) => r.monto || r.detalle) && !confirm('¿Borrar todas las filas sin registrar?')) return; mov.drafts[dkey()] = [newDraft()]; saveMov(); drawDrawer(); drawTiles(); } }, 'Limpiar'))),
+        h('div', { class: 'border-t border-slate-800 p-3' }, btn));
+      bancoIn.id = 'banco-in';
+      drawerBox.replaceChildren(panel);
+      drawRows(); preview();
+    }
+
+    function refresh() { drawControls(); drawTiles(); drawTable(); drawDrawer(); }
+    refresh();
   }
 
   /* ---------- vista: Categorías (editar nombre y emoji; el emoji es obligatorio) ---------- */
@@ -1167,7 +1436,7 @@
   })();
 
   /* ---------- router ---------- */
-  const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: viewManual, calendario: viewCalendar, resumen: viewSummary, movimientos: viewHistory, categorias: viewCategories };
+  const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: (root) => { mov.drawer = true; history.replaceState(null, '', '#movimientos'); return viewHistory(root); }, calendario: viewCalendar, resumen: viewSummary, movimientos: viewHistory, categorias: viewCategories };
   const currentView = () => { const v = location.hash.slice(1); return VIEWS[v] ? v : 'inbox'; };
   function route() {
     navTok++;
