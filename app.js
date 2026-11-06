@@ -215,8 +215,18 @@
   const harvestEmojis = (data) => {
     if (!data) return;
     if (data.emojis) mergeEmojis(data.emojis);
-    if (Array.isArray(data.results)) data.results.forEach((r) => { if (r && r.ok && r.data && r.data.emojis) mergeEmojis(r.data.emojis); });
+    if (data.tipos) mergeTipos(data.tipos);
+    if (Array.isArray(data.results)) data.results.forEach((r) => { if (r && r.ok && r.data) { if (r.data.emojis) mergeEmojis(r.data.emojis); if (r.data.tipos) mergeTipos(r.data.tipos); } });
   };
+  state.tipos = (() => { try { return JSON.parse(localStorage.getItem('fos.tipos')) || {}; } catch { return {}; } })();
+  function mergeTipos(m) {
+    if (!m || typeof m !== 'object') return;
+    state.tipos = Object.assign({}, m);
+    try { localStorage.setItem('fos.tipos', JSON.stringify(state.tipos)); } catch { /* sin storage */ }
+  }
+  const tipoOf = (c) => state.tipos[normKey(c)] || null;               // null = categoría antigua sin tipo: se ofrece en ambos lados
+  const catsFor = (tipo) => state.cats.filter((c) => !tipoOf(c) || tipoOf(c) === tipo);
+  const setCats = (list) => { state.cats = [...new Set(list)].sort((a, b) => a.localeCompare(b, 'es')); };
   const emojiOf = (c) => state.emojis[normKey(c)] || '';
   const catLabel = (c) => (emojiOf(c) ? `${emojiOf(c)} ${c}` : c);
   const EMOJI_PALETTE = ['🍽️', '🛒', '☕', '🍔', '🍕', '🥤', '🚌', '🚕', '⛽', '🏠', '💡', '📶', '📱', '💊', '🩺', '🏋️', '🎮', '🎬', '🎁', '👕', '🛍️', '💇', '👨‍👩‍👧', '🐶', '📚', '✈️', '🧾', '💸', '🔧', '🧴'];
@@ -262,8 +272,7 @@
     await swr(root, 'inbox', async () => { const raw = await fetchInboxRaw(); shapeInbox(raw); return raw; },
       (raw) => {
         inbox.data = shapeInbox(raw);
-        mergeCats(inbox.data.debito.categories);
-        if (inbox.data.credito) mergeCats(inbox.data.credito.categories);
+        setCats([...inbox.data.debito.categories, ...(inbox.data.credito ? inbox.data.credito.categories : [])]);
         renderInbox(root);
       }, { loadingText: 'Cargando movimientos…', retry: () => viewInbox(root) });
   }
@@ -420,10 +429,11 @@
   }
 
   function inboxCard(it, kind, onDone) {
+    const itemTipo = kind === 'credito' || (it.monto || 0) < 0 ? 'Egreso' : 'Ingreso'; // las categorías se filtran por el signo del monto
     const sel = h('select', { class: INPUT, 'aria-label': 'Categoría' },
       h('option', { value: '', disabled: true, selected: true }, 'Elegir categoría…'),
-      state.cats.map((c) => h('option', { value: c }, catLabel(c))),
-      h('option', { value: NEW_CAT }, '+ Nueva categoría…'));
+      catsFor(itemTipo).map((c) => h('option', { value: c }, catLabel(c))),
+      h('option', { value: NEW_CAT }, `+ Nueva categoría de ${itemTipo.toLowerCase()}…`));
     const newInp = h('input', { class: INPUT + ' hidden mt-2', placeholder: 'Nombre de la categoría', maxlength: '40', 'aria-label': 'Nueva categoría' });
     const emoInp = h('input', { class: INPUT + ' mt-2 w-24 text-center text-xl', placeholder: '😀', maxlength: '16', 'aria-label': 'Emoji de la nueva categoría (obligatorio)', inputmode: 'text' });
     const emoBox = h('div', { class: 'hidden' }, h('p', { class: 'mt-2 text-xs text-slate-400' }, 'Toda categoría nueva necesita un emoji:'), emoInp, emojiPicker(emoInp));
@@ -492,7 +502,16 @@
   const manual = { mode: 'efectivo' };
   const MODES = [['efectivo', 'Efectivo'], ['consumo', 'Consumo tarjeta'], ['pago', 'Pago tarjeta']];
   const field = (label, el) => h('label', { class: 'block text-sm text-slate-300' }, label, h('div', { class: 'mt-1' }, el));
-  const catSelect = () => h('select', { class: INPUT }, h('option', { value: '' }, 'Sin categoría (irá al Inbox)'), state.cats.map((c) => h('option', { value: c }, catLabel(c))));
+  const catSelect = (tipo = 'Egreso') => {
+    const sel = h('select', { class: INPUT });
+    sel.refill = (t) => {
+      const prev = sel.value;
+      sel.replaceChildren(h('option', { value: '' }, 'Sin categoría (irá al Inbox)'), ...catsFor(t).map((c) => h('option', { value: c }, catLabel(c))));
+      sel.value = catsFor(t).includes(prev) ? prev : '';
+    };
+    sel.refill(tipo);
+    return sel;
+  };
   const optSelect = (list) => h('select', { class: INPUT, required: true }, list.map((x) => h('option', { value: x }, x)));
 
   /**
@@ -527,14 +546,17 @@
     const monto = h('input', { type: 'number', required: true, min: '0.01', max: '1000000', step: '0.01', inputmode: 'decimal', class: INPUT, placeholder: '0.00' });
     const detalle = h('input', { type: 'text', required: true, maxlength: '120', class: INPUT, placeholder: 'Ej. Menú almuerzo' });
     const desc = h('input', { type: 'text', maxlength: '200', class: INPUT, placeholder: 'Opcional' });
-    const cat = catSelect();
-    return buildForm({
+    const cat = catSelect('Egreso');
+    tipo.addEventListener('change', () => cat.refill(tipo.value));
+    const formE = buildForm({
       idle: 'Registrar en efectivo', action: 'addManual', fecha,
       fields: [field('Fecha y hora', fecha), h('div', { class: 'grid grid-cols-2 gap-3' }, field('Tipo', tipo), field('Monto (S/)', monto)),
         field('Detalle / Comercio', detalle), field('Descripción', desc), field('Categoría', cat)],
       collect: () => ({ tipo: tipo.value, banco: 'Efectivo', monto: Number(monto.value), detalle: detalle.value.trim(), descripcion: desc.value.trim(), categoria: cat.value }),
       done: (r) => `Registrado ${r.id}`,
     });
+    formE.addEventListener('reset', () => setTimeout(() => cat.refill(tipo.value), 0));
+    return formE;
   }
 
   function formConsumo(opts) {
@@ -584,7 +606,7 @@
     let opts = { tarjetas: [], cuentas: ['BCP', 'Interbank', 'Efectivo'] };
     try {
       const r = await api('getCategories');
-      mergeCats(r.categories);
+      setCats(r.categories);
       opts = { tarjetas: r.tarjetas || [], cuentas: r.cuentas || opts.cuentas };
     } catch (e) { if (e.code === 'UNAUTHORIZED' || e.code === 'NO_CREDENTIALS') return; /* el modo Efectivo funciona igual */ }
     renderManual(root, opts);
@@ -699,6 +721,19 @@
     const dlg = h('dialog', { class: 'w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-0 text-slate-100', 'aria-label': isNew ? 'Nueva categoría' : `Editar ${item.nombre}` });
     const name = h('input', { class: INPUT, value: isNew ? '' : item.nombre, maxlength: '40', required: true, 'aria-label': 'Nombre de la categoría' });
     const emo = h('input', { class: INPUT + ' w-24 text-center text-2xl', value: isNew ? '' : (item.emoji || ''), placeholder: '😀', maxlength: '16', required: true, 'aria-label': 'Emoji (obligatorio)' });
+    const tipoDefault = isNew ? '' : (item.tipo || (item.tipoUso === 'Egreso' || item.tipoUso === 'Ingreso' ? item.tipoUso : ''));
+    let tipoSel = tipoDefault;
+    const tipoBtns = ['Egreso', 'Ingreso'].map((tp) => {
+      const b = h('button', { type: 'button', role: 'radio', 'aria-checked': tipoSel === tp ? 'true' : 'false', class: 'flex-1 rounded-lg border px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300' }, tp === 'Egreso' ? 'Egreso (gasto)' : 'Ingreso');
+      b.dataset.tipo = tp;
+      b.addEventListener('click', () => { tipoSel = tp; sync(); });
+      return b;
+    });
+    const paintTipo = () => tipoBtns.forEach((b) => {
+      const on = tipoSel === b.dataset.tipo;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.className = 'flex-1 rounded-lg border px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (on ? 'border-emerald-400 bg-emerald-500/15 text-emerald-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800');
+    });
     const note = h('p', { class: 'min-h-[1.25rem] text-xs text-slate-400', 'aria-live': 'polite' });
     const err = h('p', { class: 'hidden rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200' });
     const save = h('button', { type: 'submit', class: BTN, disabled: true }, 'Guardar');
@@ -707,20 +742,25 @@
       const nm = name.value.trim(), em = emo.value.trim();
       const clash = others.find((i) => normKey(i.nombre) === normKey(nm));
       const nameOk = validCat(nm) && !(item === null && clash) && !(clash && clash.sistema) && !d.items.some((i) => i.sistema && normKey(i.nombre) === normKey(nm));
+      paintTipo();
       let msg = '';
-      if (!em) msg = 'Falta el emoji: es obligatorio.';
+      const tipoClash = clash && clash.tipo && tipoSel && clash.tipo !== tipoSel;
+      if (!tipoSel) msg = 'Elige si es de Egreso o de Ingreso.';
+      else if (tipoClash) msg = `No se puede fusionar con «${clash.nombre}»: es de ${clash.tipo}.`;
+      else if (!em) msg = 'Falta el emoji: es obligatorio.';
       else if (!validEmoji(em)) msg = 'Pon un solo emoji (sin letras ni números).';
       else if (isNew && clash) msg = 'Ya existe una categoría con ese nombre.';
       else if (clash) msg = `Se fusionará con «${clash.nombre}»: sus movimientos pasarán a esa categoría.`;
       else if (item && nm && nm !== item.nombre) msg = `Se renombrará en ${item.debito + item.credito} movimiento(s) (Débito ${item.debito} · Crédito ${item.credito}).`;
       note.textContent = msg;
-      note.className = 'min-h-[1.25rem] text-xs ' + (clash && !isNew ? 'text-amber-300' : !em || !validEmoji(em) ? 'text-rose-300' : 'text-slate-400');
-      save.disabled = !(nameOk && validEmoji(em));
+      note.className = 'min-h-[1.25rem] text-xs ' + (!tipoSel || tipoClash || !em || !validEmoji(em) ? 'text-rose-300' : clash && !isNew ? 'text-amber-300' : 'text-slate-400');
+      save.disabled = !(nameOk && validEmoji(em) && tipoSel && !tipoClash);
     };
     name.addEventListener('input', sync); emo.addEventListener('input', sync);
     const form = h('form', { class: 'space-y-3 p-6', autocomplete: 'off' },
       h('h2', { class: 'text-lg font-semibold' }, isNew ? 'Nueva categoría' : 'Editar categoría'),
       h('label', { class: 'block text-sm' }, 'Nombre', name),
+      h('div', { class: 'text-sm' }, h('span', {}, 'Tipo '), h('span', { class: 'text-rose-300' }, '(obligatorio)'), h('div', { class: 'mt-1 flex gap-2', role: 'radiogroup', 'aria-label': 'Tipo de categoría' }, tipoBtns)),
       h('div', { class: 'text-sm' }, h('span', {}, 'Emoji '), h('span', { class: 'text-rose-300' }, '(obligatorio)'), h('div', {}, emo), emojiPicker(emo)),
       note, err,
       h('div', { class: 'flex justify-end gap-2 pt-1' }, h('button', { type: 'button', class: BTN_GHOST, onclick: () => dlg.close() }, 'Cancelar'), save));
@@ -729,12 +769,12 @@
       if (save.disabled) return;
       save.disabled = true; save.textContent = 'Guardando…'; err.classList.add('hidden');
       try {
-        const r = await api('saveCategory', { nombre: item ? item.nombre : undefined, nuevo: name.value.trim(), emoji: emo.value.trim() });
+        const r = await api('saveCategory', { nombre: item ? item.nombre : undefined, nuevo: name.value.trim(), emoji: emo.value.trim(), tipo: tipoSel });
         toast(r.fusionada ? `Fusionada en «${r.nombre}»` : `Guardado ${r.emoji} ${r.nombre}`);
         dlg.close();
         viewCategories(root);
       } catch (ex) {
-        err.textContent = ex.code === 'EXISTS' ? 'Ya existe una categoría con ese nombre.' : errText(ex); err.classList.remove('hidden');
+        err.textContent = ex.code === 'EXISTS' ? 'Ya existe una categoría con ese nombre.' : ex.code === 'TIPO_MISMATCH' ? 'No se pueden fusionar categorías de distinto tipo.' : errText(ex); err.classList.remove('hidden');
         save.textContent = 'Guardar'; sync();
       }
     });
@@ -744,23 +784,33 @@
     dlg.showModal(); sync(); (isNew ? name : emo).focus();
   }
 
+  const catUi = { filtro: 'todas' };
   function paintCategories(root, d) {
-    const missing = d.items.filter((i) => !i.emoji);
+    const incompletas = d.items.filter((i) => !i.emoji || !i.tipo);
+    const shown = d.items.filter((i) => catUi.filtro === 'todas' || (catUi.filtro === 'sin' ? !i.tipo : i.tipo === catUi.filtro));
+    const count = (f) => d.items.filter((i) => (f === 'sin' ? !i.tipo : i.tipo === f)).length;
+    const tabs = [['todas', `Todas ${d.items.length}`], ['Egreso', `Egresos ${count('Egreso')}`], ['Ingreso', `Ingresos ${count('Ingreso')}`], ...(count('sin') ? [['sin', `Sin tipo ${count('sin')}`]] : [])];
     root.replaceChildren(...[
       h('div', { class: 'mb-3 flex items-center justify-between gap-2' },
         h('h2', { class: 'text-base font-semibold' }, 'Categorías'),
         h('button', { type: 'button', class: BTN + ' !px-3 !py-1.5', onclick: () => openCatEditor(null, d, root) }, '+ Nueva')),
-      missing.length > 0 && h('p', { class: 'mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100', role: 'status' },
-        `${missing.length} categoría(s) sin emoji. Asígnales uno: es obligatorio.`),
-      h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Renombrar una categoría la cambia en todos sus movimientos, en Débito y en Crédito por separado.'),
-      h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, d.items.map((i) =>
-        h('li', { class: 'flex items-center gap-3 rounded-xl border bg-slate-900 p-3 ' + (i.emoji ? 'border-slate-800' : 'border-amber-500/50') },
+      incompletas.length > 0 && h('p', { class: 'mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100', role: 'status' },
+        `${incompletas.length} categoría(s) incompletas (sin emoji o sin tipo). Complétalas con Editar.`),
+      h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Cada categoría es de Egreso o de Ingreso: en el Inbox solo se ofrecen las que corresponden al signo del movimiento. Renombrar cambia todos sus movimientos, en Débito y en Crédito por separado.'),
+      h('div', { class: 'mb-3 flex flex-wrap gap-1 rounded-xl bg-slate-900 p-1', role: 'tablist', 'aria-label': 'Filtrar por tipo' }, tabs.map(([k, label]) =>
+        h('button', { type: 'button', role: 'tab', 'aria-selected': catUi.filtro === k ? 'true' : 'false', onclick: () => { catUi.filtro = k; paintCategories(root, d); },
+          class: 'rounded-lg px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (catUi.filtro === k ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200') }, label))),
+      h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, shown.map((i) =>
+        h('li', { class: 'flex items-center gap-3 rounded-xl border bg-slate-900 p-3 ' + (i.emoji && i.tipo ? 'border-slate-800' : 'border-amber-500/50') },
           h('span', { class: 'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-2xl', 'aria-hidden': i.emoji ? 'true' : null }, i.emoji || '❔'),
           h('div', { class: 'min-w-0 flex-1' },
-            h('p', { class: 'truncate font-medium' }, i.nombre),
-            h('p', { class: 'truncate text-xs text-slate-500' }, i.sistema ? 'Reservada del sistema' : `Débito ${i.debito} · Crédito ${i.credito}`, !i.emoji && h('span', { class: 'ml-2 text-amber-300' }, 'falta emoji'))),
+            h('p', { class: 'flex items-center gap-2 truncate font-medium' }, i.nombre,
+              i.tipo && h('span', { class: 'rounded px-1.5 py-0.5 text-[11px] font-normal ' + (i.tipo === 'Ingreso' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300') }, i.tipo)),
+            h('p', { class: 'truncate text-xs text-slate-500' }, i.sistema ? 'Reservada del sistema' : `Débito ${i.debito} · Crédito ${i.credito}`,
+              !i.emoji && h('span', { class: 'ml-2 text-amber-300' }, 'falta emoji'), !i.tipo && h('span', { class: 'ml-2 text-amber-300' }, 'falta tipo'))),
           i.sistema ? h('span', { class: 'text-xs text-slate-600', title: 'No editable' }, '🔒')
-            : h('button', { type: 'button', class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => openCatEditor(i, d, root), 'aria-label': `Editar ${i.nombre}` }, 'Editar'))))].filter(Boolean));
+            : h('button', { type: 'button', class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => openCatEditor(i, d, root), 'aria-label': `Editar ${i.nombre}` }, 'Editar'))))
+    ].filter(Boolean));
   }
   async function viewCategories(root) {
     await swr(root, 'cats', () => api('getCategoryAdmin'), (d) => paintCategories(root, d), { loadingText: 'Cargando categorías…', retry: () => viewCategories(root) });
