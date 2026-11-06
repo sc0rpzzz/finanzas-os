@@ -1693,6 +1693,8 @@
   document.addEventListener('DOMContentLoaded', () => {
     hydrateIcons();
     initNav();
+    // con el mouse, el enlace del menú no se queda con el anillo de foco (con teclado sí se mantiene)
+    document.querySelectorAll('[data-nav]').forEach((a) => a.addEventListener('pointerup', () => a.blur()));
     daily.mount();
     initSetup();
     document.querySelectorAll('[data-act=yape]').forEach((b) => b.addEventListener('click', syncYape));

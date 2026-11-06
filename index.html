@@ -184,9 +184,9 @@
     </div>
   </header>
 
-  <!-- En PC el contenido va pegado al menú (no centrado) y aprovecha hasta 1500 px de ancho -->
+  <!-- En PC el contenido va pegado al menú y usa todo el ancho (tope 1800 px; en pantallas ultra anchas se centra) -->
   <div id="shell" class="md:pl-60 xl:pl-[17rem]">
-    <div id="page-head" class="mx-auto hidden max-w-3xl px-4 pt-9 md:flex md:max-w-6xl md:items-end md:justify-between md:gap-6 md:px-8 xl:mx-0 xl:max-w-[1500px] xl:px-10">
+    <div id="page-head" class="mx-auto hidden max-w-3xl px-4 pt-9 md:flex md:max-w-6xl md:items-end md:justify-between md:gap-6 md:px-8 xl:mx-0 xl:max-w-[1800px] xl:px-10 min-[2200px]:mx-auto">
       <div class="min-w-0">
         <p id="page-kicker" class="text-xs font-medium uppercase tracking-[.18em] text-emerald-400/80"></p>
         <h1 id="page-title" class="mt-1.5 text-3xl font-semibold tracking-tight text-white"></h1>
@@ -199,7 +199,7 @@
         </button>
       </div>
     </div>
-    <main id="view" class="mx-auto max-w-3xl px-4 pb-28 pt-4 md:max-w-6xl md:px-8 md:pb-10 md:pt-6 xl:mx-0 xl:max-w-[1500px] xl:px-10" aria-live="polite"></main>
+    <main id="view" class="mx-auto max-w-3xl px-4 pb-28 pt-4 md:max-w-6xl md:px-8 md:pb-10 md:pt-6 xl:mx-0 xl:max-w-[1800px] xl:px-10 min-[2200px]:mx-auto" aria-live="polite"></main>
   </div>
 
   <nav id="side-nav" class="glass fixed inset-x-0 bottom-0 z-30 border-t border-white/5 safe-b md:inset-y-0 md:right-auto md:flex md:w-60 md:flex-col md:border-r md:border-t-0 md:pb-0 xl:w-[17rem]" aria-label="Secciones">
@@ -264,6 +264,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=24" defer></script>
+  <script src="app.js?v=25" defer></script>
 </body>
 </html>
