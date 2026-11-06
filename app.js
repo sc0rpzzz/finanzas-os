@@ -20,6 +20,7 @@
   const cacheSet = (key, v) => { try { const s = JSON.stringify({ t: Date.now(), v }); if (s.length < 1500000) localStorage.setItem(CACHE_PREFIX + key, s); } catch { /* sin espacio: no pasa nada */ } };
   const cacheClear = () => { try { Object.keys(localStorage).filter((k) => k.startsWith(CACHE_PREFIX)).forEach((k) => localStorage.removeItem(k)); } catch { /* nada */ } };
   const WRITE_ACTIONS = new Set(['updateMovimiento', 'addMovimientos', 'categorizeBatch', 'resolveDuplicado', 'categorize', 'setPagado', 'toggleCuota', 'setEstado', 'addManual', 'addCreditConsumo', 'addPagoTarjeta', 'syncYape', 'saveCategory']);
+  let cacheGen = 0; // sube con cada escritura: una precarga que empezó antes no puede guardar datos viejos
   let inflight = 0;
   const busy = (d) => { inflight = Math.max(0, inflight + d); const el = document.getElementById('busy'); if (el) el.classList.toggle('hidden', inflight === 0); };
 
@@ -130,7 +131,7 @@
       throw new ApiError(code, json && json.message);
     }
     harvestEmojis(json.data);
-    if (WRITE_ACTIONS.has(action)) cacheClear(); // lo guardado ya no es fiel: mejor cargar de nuevo que mostrar algo viejo
+    if (WRITE_ACTIONS.has(action)) { cacheClear(); cacheGen++; scheduleWarm(); } // lo guardado ya no es fiel: se borra y se vuelve a precargar por detrás
     return json.data;
   }
 
@@ -1450,6 +1451,43 @@
     };
   })();
 
+
+  /* ---------- precarga: baja todas las pantallas por detrás para que al entrar ya estén listas ---------- */
+  let warming = null, warmTimer = null;
+  function warmCache() {
+    if (warming) return warming;
+    const gen = cacheGen;
+    const put = (k, v) => { if (gen === cacheGen) cacheSet(k, v); };
+    warming = (async () => {
+      const hist = (hoja) => ({ action: 'getHistory', payload: mov.cuenta[hoja] ? { hoja, cuenta: mov.cuenta[hoja] } : { hoja } });
+      await Promise.allSettled([
+        (async () => { const raw = await fetchInboxRaw(); shapeInbox(raw); put('inbox', raw); })(),
+        (async () => {
+          const res = (await api('batch', { calls: [hist('debito'), hist('credito'), { action: 'getSummary' }, { action: 'getCategoryAdmin' }, { action: 'getCards' }] })).results;
+          ['debito', 'credito'].forEach((k, i) => { const r = res[i]; if (r && r.ok) { mov.cuenta[k] = mov.cuenta[k] || r.data.cuenta || ''; put(`mov:${k}:${mov.cuenta[k]}`, r.data); } });
+          if (res[2] && res[2].ok) put('sum:actual', res[2].data);
+          if (res[3] && res[3].ok) put('cats', res[3].data);
+          if (res[4] && res[4].ok) put('cards', res[4].data);
+        })(),
+      ]);
+    })().catch(() => { /* la precarga es un extra: si falla, cada pantalla carga como siempre */ }).finally(() => { warming = null; });
+    return warming;
+  }
+  function scheduleWarm() { clearTimeout(warmTimer); warmTimer = setTimeout(() => { if (hasCreds()) warmCache(); }, 500); }
+
+  /* ---------- pantalla de bienvenida: unos segundos al abrir, y luego todo responde al instante ---------- */
+  async function boot() {
+    const splash = $('#splash');
+    const hide = () => { if (splash) { splash.classList.add('opacity-0'); setTimeout(() => splash.remove(), 400); } };
+    if (!hasCreds()) { route(); hide(); return; }
+    const t0 = Date.now(), cached = !!cacheGet('inbox');
+    const w = warmCache();
+    await Promise.race([cached ? new Promise((r) => setTimeout(r, 600)) : w, new Promise((r) => setTimeout(r, 8000))]);
+    const rest = 1000 - (Date.now() - t0);
+    if (rest > 0) await new Promise((r) => setTimeout(r, rest));
+    route(); hide();
+  }
+
   /* ---------- router ---------- */
   const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: (root) => { mov.drawer = true; history.replaceState(null, '', '#movimientos'); return viewHistory(root); }, calendario: viewCalendar, resumen: viewSummary, movimientos: viewHistory, categorias: viewCategories };
   const currentView = () => { const v = location.hash.slice(1); return VIEWS[v] ? v : 'inbox'; };
@@ -1478,7 +1516,7 @@
       ls.del(KEYS.token); cacheClear(); $('#view').replaceChildren(); openSetup();
     }));
     window.addEventListener('hashchange', route);
-    route();
+    boot();
     if ('serviceWorker' in navigator && location.protocol === 'https:') {
       navigator.serviceWorker.register('./sw.js').catch(() => { /* la app funciona sin SW */ });
     }
