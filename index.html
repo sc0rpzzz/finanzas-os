@@ -3,70 +3,188 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#020617">
+  <meta name="theme-color" content="#05070d">
+  <meta name="color-scheme" content="dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Finanzas OS</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <!-- Tailwind Play CDN: ideal para arrancar sin build. Más adelante se puede compilar con la CLI. -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    tailwind.config = { theme: { extend: { fontFamily: { sans: ['ui-sans-serif', 'system-ui', 'Segoe UI', 'Roboto', 'sans-serif'] } } } };
+    tailwind.config = { theme: { extend: { fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'Segoe UI', 'Roboto', 'sans-serif'] } } } };
   </script>
   <style>
-    body { background: #020617; color: #e2e8f0; -webkit-tap-highlight-color: transparent; }
+    /* ===== Tema oscuro de Finanzas OS: tokens, superficies, movimiento ===== */
+    :root { color-scheme: dark; --bg: #05070d; --line: rgba(148, 163, 184, .10); --line-strong: rgba(148, 163, 184, .20); --glow: rgba(16, 185, 129, .35); --ease: cubic-bezier(.2, .8, .2, 1); }
+    html { background: var(--bg); }
+    body.fos { background: transparent; color: #e2e8f0; font-feature-settings: "cv11", "ss01"; -webkit-tap-highlight-color: transparent; }
+    body.fos::before { /* brillo ambiental del fondo */
+      content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background:
+        radial-gradient(55rem 38rem at 8% -12%, rgba(16, 185, 129, .11), transparent 60%),
+        radial-gradient(48rem 34rem at 108% 6%, rgba(99, 102, 241, .09), transparent 60%),
+        radial-gradient(40rem 30rem at 50% 118%, rgba(6, 182, 212, .06), transparent 60%);
+    }
+    ::selection { background: rgba(16, 185, 129, .35); }
+    * { scrollbar-width: thin; scrollbar-color: rgba(148, 163, 184, .25) transparent; }
     .safe-b { padding-bottom: max(env(safe-area-inset-bottom), 0.5rem); }
     .safe-t { padding-top: env(safe-area-inset-top); }
-    dialog::backdrop { background: rgb(2 6 23 / .8); }
-    .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .spin { animation: none; } * { transition: none !important; } }
+
+    /* superficies */
+    .fos .card { background: linear-gradient(180deg, rgba(30, 41, 59, .52), rgba(15, 23, 42, .62)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04), 0 14px 34px -20px rgba(0, 0, 0, .8); }
+    .fos .card.border-slate-800 { border-color: var(--line); }
+    .fos .card-hover { transition: transform .2s var(--ease), border-color .2s, box-shadow .25s; }
+    .fos .card-hover:hover { transform: translateY(-2px); border-color: rgba(52, 211, 153, .28); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05), 0 20px 40px -22px rgba(16, 185, 129, .45); }
+    .fos .card.is-staged { box-shadow: 0 0 0 1px rgba(52, 211, 153, .25), 0 18px 40px -22px var(--glow); }
+    .fos .glass { background: rgba(15, 23, 42, .74); -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
+    .fos .glass-strong { background: rgba(8, 12, 24, .9); }
+    .brand-mark { background: linear-gradient(135deg, #34d399, #10b981 50%, #0891b2); box-shadow: 0 6px 20px -6px var(--glow), inset 0 1px 0 rgba(255, 255, 255, .35); }
+
+    /* controles */
+    .fos .btn-primary { background: linear-gradient(135deg, #34d399, #10b981 55%, #0d9488); box-shadow: 0 8px 22px -12px var(--glow), inset 0 1px 0 rgba(255, 255, 255, .35); transition: transform .15s var(--ease), filter .15s, box-shadow .2s; }
+    .fos .btn-primary:hover:not(:disabled) { filter: brightness(1.08); box-shadow: 0 12px 28px -12px rgba(16, 185, 129, .65), inset 0 1px 0 rgba(255, 255, 255, .4); }
+    .fos .btn-ghost { background: rgba(255, 255, 255, .02); transition: background .15s, border-color .15s, transform .15s var(--ease); }
+    .fos .btn-ghost:hover { border-color: var(--line-strong); }
+    .fos .btn-primary:active:not(:disabled), .fos .btn-ghost:active, .fos .btn-yape:active { transform: scale(.97); }
+    .fos .btn-yape { background: linear-gradient(135deg, #a78bfa, #8b5cf6 45%, #6d28d9); box-shadow: 0 8px 22px -12px rgba(139, 92, 246, .7), inset 0 1px 0 rgba(255, 255, 255, .3); transition: transform .15s var(--ease), filter .15s; }
+    .fos .btn-yape:hover:not(:disabled) { filter: brightness(1.1); }
+    .fos .field { transition: border-color .15s, box-shadow .15s, background .15s; }
+    .fos [role=tablist] { background: rgba(15, 23, 42, .6); border-color: var(--line); }
+    .fos [role=tab] { transition: color .2s, background .25s, box-shadow .25s; }
+    .fos [role=tab][aria-selected=true] { background: linear-gradient(180deg, rgba(52, 211, 153, .2), rgba(16, 185, 129, .08)); color: #ecfdf5; box-shadow: inset 0 0 0 1px rgba(52, 211, 153, .3), 0 6px 18px -10px var(--glow); }
+    .fos thead th.bg-slate-800 { background: rgba(15, 23, 42, .97); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #94a3b8; }
+    .fos tbody tr { transition: background .15s; }
+
+    /* navegación */
+    .fos [data-nav] { position: relative; transition: color .2s, background .2s; }
+    .fos [data-nav] svg { transition: transform .3s var(--ease); }
+    .fos [data-nav][aria-current=page] { color: #6ee7b7; }
+    @media (max-width: 767px) {
+      .fos [data-nav] > span.inline-flex:first-child { padding: 3px 14px; border-radius: 999px; transition: background .25s, box-shadow .25s; }
+      .fos [data-nav][aria-current=page] > span.inline-flex:first-child { background: rgba(16, 185, 129, .16); box-shadow: 0 0 18px -6px var(--glow); }
+      .fos [data-nav][aria-current=page] svg { transform: translateY(-1px) scale(1.06); }
+    }
+    @media (min-width: 768px) {
+      .fos [data-nav][aria-current=page] { background: linear-gradient(90deg, rgba(16, 185, 129, .16), rgba(16, 185, 129, .02)); color: #d1fae5; }
+      .fos [data-nav][aria-current=page]::before { content: ''; position: absolute; left: -12px; top: 9px; bottom: 9px; width: 3px; border-radius: 0 3px 3px 0; background: linear-gradient(#34d399, #10b981); box-shadow: 0 0 12px var(--glow); }
+      .fos [data-nav]:hover svg { transform: translateX(2px); }
+    }
+
+    /* movimiento */
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    @keyframes popIn { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
+    @keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+    @keyframes shimmer { from { background-position: 100% 50%; } to { background-position: 0 50%; } }
+    @keyframes busy { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+    @keyframes drawerUp { from { transform: translateY(100%); } to { transform: none; } }
+    @keyframes drawerLeft { from { transform: translateX(100%); } to { transform: none; } }
+    @keyframes pulseRing { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, .45); } 100% { box-shadow: 0 0 0 22px rgba(16, 185, 129, 0); } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .view-enter > * { animation: fadeUp .5s var(--ease) both; }
+    .view-enter > *:nth-child(2) { animation-delay: .05s; } .view-enter > *:nth-child(3) { animation-delay: .1s; }
+    .view-enter > *:nth-child(4) { animation-delay: .15s; } .view-enter > *:nth-child(n+5) { animation-delay: .2s; }
+    .view-enter li, .view-enter tbody tr { animation: fadeUp .45s var(--ease) both; }
+    .view-enter li:nth-child(2), .view-enter tbody tr:nth-child(2) { animation-delay: .04s; }
+    .view-enter li:nth-child(3), .view-enter tbody tr:nth-child(3) { animation-delay: .08s; }
+    .view-enter li:nth-child(4), .view-enter tbody tr:nth-child(4) { animation-delay: .12s; }
+    .view-enter li:nth-child(5), .view-enter tbody tr:nth-child(5) { animation-delay: .16s; }
+    .view-enter li:nth-child(6), .view-enter tbody tr:nth-child(6) { animation-delay: .2s; }
+    .view-enter li:nth-child(7), .view-enter tbody tr:nth-child(7) { animation-delay: .24s; }
+    .view-enter li:nth-child(n+8), .view-enter tbody tr:nth-child(n+8) { animation-delay: .28s; }
+    .skel { border-radius: 14px; background: linear-gradient(90deg, rgba(30, 41, 59, .5) 25%, rgba(51, 65, 85, .55) 37%, rgba(30, 41, 59, .5) 63%); background-size: 400% 100%; animation: shimmer 1.4s ease infinite; }
+    .bar-grow { transform-origin: left center; animation: grow .9s var(--ease) both; }
+    .toast-in { animation: popIn .3s var(--ease) both; }
+    .pop-in, .save-bar { animation: popIn .25s var(--ease) both; }
+    .drawer-in { animation: drawerUp .35s var(--ease) both; }
+    @media (min-width: 768px) { .drawer-in { animation-name: drawerLeft; } }
+    .done-badge { background: radial-gradient(circle, rgba(16, 185, 129, .28), rgba(16, 185, 129, .08)); box-shadow: 0 0 0 1px rgba(52, 211, 153, .3), 0 0 30px -6px var(--glow); animation: popIn .45s var(--ease) both; }
+    .busy-bar { background: linear-gradient(90deg, transparent, #34d399, #22d3ee, transparent); background-size: 200% 100%; animation: busy 1.1s linear infinite; }
+    .spin { animation: spin 1s linear infinite; }
+    dialog[open] { animation: popIn .22s var(--ease); }
+    dialog::backdrop { background: rgb(2 6 23 / .7); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+    .splash-mark { animation: pulseRing 1.6s ease-out infinite; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    }
   </style>
   <script src="config.js?v=13"></script>
 </head>
-<body class="min-h-screen font-sans antialiased">
-  <div id="splash" class="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-5 bg-slate-950 transition-opacity duration-300" role="status" aria-label="Cargando Finanzas OS">
-    <p class="text-3xl font-semibold tracking-tight">Finanzas <span class="text-emerald-400">OS</span></p>
-    <div class="h-1 w-40 overflow-hidden rounded-full bg-slate-800"><div class="h-full w-1/3 animate-pulse rounded-full bg-emerald-400"></div></div>
+<body class="fos min-h-screen font-sans antialiased">
+  <div id="splash" class="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-6 bg-[#05070d] transition-opacity duration-300" role="status" aria-label="Cargando Finanzas OS">
+    <div class="brand-mark splash-mark flex h-16 w-16 items-center justify-center rounded-2xl text-slate-950">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
+    </div>
+    <p class="text-3xl font-semibold tracking-tight">Finanzas <span class="bg-gradient-to-r from-emerald-300 to-cyan-300 bg-clip-text text-transparent">OS</span></p>
+    <div class="h-1 w-44 overflow-hidden rounded-full bg-slate-800/80"><div class="busy-bar h-full w-full rounded-full"></div></div>
     <p class="text-xs text-slate-500">Preparando tus datos…</p>
   </div>
-  <div id="busy" class="hidden fixed inset-x-0 top-0 z-50 h-0.5 animate-pulse bg-emerald-400" role="progressbar" aria-label="Actualizando"></div>
-  <header class="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/90 backdrop-blur safe-t md:hidden">
-    <div class="mx-auto flex max-w-3xl items-center justify-between gap-2 px-4 py-3 md:max-w-6xl md:px-8">
-      <h1 class="text-lg font-semibold tracking-tight md:hidden">Finanzas <span class="text-emerald-400">OS</span></h1>
-      <div class="flex items-center gap-2 md:ml-auto">
+  <div id="busy" class="busy-bar hidden fixed inset-x-0 top-0 z-50 h-0.5" role="progressbar" aria-label="Actualizando"></div>
+
+  <header class="glass sticky top-0 z-20 border-b border-white/5 safe-t md:hidden">
+    <div class="mx-auto flex max-w-3xl items-center justify-between gap-2 px-4 py-3">
+      <div class="flex min-w-0 items-center gap-2.5">
+        <span class="brand-mark flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-950" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
+        </span>
+        <div class="min-w-0 leading-tight">
+          <p class="text-[11px] font-medium uppercase tracking-[.16em] text-slate-500">Finanzas <span class="text-emerald-400">OS</span></p>
+          <h1 id="mobile-title" class="truncate text-base font-semibold tracking-tight text-white">Inbox</h1>
+        </div>
+      </div>
+      <div class="flex items-center gap-1.5">
         <button data-act="yape" type="button"
-          class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:opacity-50">
-          <span data-icon="refresh"></span> Sincronizar Yape
+          class="btn-yape inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:opacity-50">
+          <span data-icon="refresh"></span> Yape
         </button>
         <button data-act="logout" type="button" aria-label="Cerrar sesión"
-          class="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400">
+          class="rounded-xl p-2 text-slate-400 transition hover:bg-white/5 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400">
           <span data-icon="logout"></span>
         </button>
       </div>
     </div>
   </header>
 
-  <div class="md:pl-56"><main id="view" class="mx-auto max-w-3xl px-4 pb-28 pt-4 md:max-w-6xl md:px-8 md:pb-10" aria-live="polite"></main></div>
-
-  <nav class="fixed inset-x-0 bottom-0 z-30 border-t border-slate-800 bg-slate-950/95 backdrop-blur safe-b md:inset-y-0 md:right-auto md:flex md:w-56 md:flex-col md:border-r md:border-t-0 md:pb-0" aria-label="Secciones">
-    <div class="hidden px-6 py-4 text-lg font-semibold tracking-tight md:block">Finanzas <span class="text-emerald-400">OS</span></div>
-    <div class="mx-auto grid max-w-3xl grid-cols-6 md:flex md:max-w-none md:flex-col md:gap-1 md:px-3">
-      <a href="#inbox" data-nav="inbox" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="inbox"></span>Inbox</a>
-      <a href="#tarjetas" data-nav="tarjetas" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="card"></span>Tarjetas</a>
-      <a href="#movimientos" data-nav="movimientos" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="table"></span><span class="md:hidden">Movs.</span><span class="hidden md:inline">Movimientos</span></a>
-      <a href="#calendario" data-nav="calendario" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="calendar"></span>Cuotas</a>
-      <a href="#resumen" data-nav="resumen" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="chart"></span>Resumen</a>
-      <a href="#categorias" data-nav="categorias" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="tag"></span><span class="md:hidden">Categ.</span><span class="hidden md:inline">Categorías</span></a>
+  <div class="md:pl-60">
+    <div id="page-head" class="mx-auto hidden max-w-3xl px-4 pt-9 md:block md:max-w-6xl md:px-8">
+      <p id="page-kicker" class="text-xs font-medium uppercase tracking-[.18em] text-emerald-400/80"></p>
+      <h1 id="page-title" class="mt-1.5 text-3xl font-semibold tracking-tight text-white"></h1>
+      <p id="page-sub" class="mt-1 text-sm text-slate-400"></p>
     </div>
-    <div class="mt-auto hidden flex-col gap-2 border-t border-slate-800 p-3 md:flex">
+    <main id="view" class="mx-auto max-w-3xl px-4 pb-28 pt-4 md:max-w-6xl md:px-8 md:pb-10 md:pt-6" aria-live="polite"></main>
+  </div>
+
+  <nav class="glass fixed inset-x-0 bottom-0 z-30 border-t border-white/5 safe-b md:inset-y-0 md:right-auto md:flex md:w-60 md:flex-col md:border-r md:border-t-0 md:pb-0" aria-label="Secciones">
+    <div class="hidden items-center gap-3 px-6 py-6 md:flex">
+      <span class="brand-mark flex h-9 w-9 items-center justify-center rounded-xl text-slate-950" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
+      </span>
+      <div class="leading-tight">
+        <p class="text-lg font-semibold tracking-tight">Finanzas <span class="bg-gradient-to-r from-emerald-300 to-cyan-300 bg-clip-text text-transparent">OS</span></p>
+        <p class="text-[11px] text-slate-500">Tu dinero, al día</p>
+      </div>
+    </div>
+    <p class="hidden px-6 pb-2 text-[11px] font-medium uppercase tracking-[.16em] text-slate-600 md:block">Secciones</p>
+    <div class="mx-auto grid max-w-3xl grid-cols-6 md:flex md:max-w-none md:flex-col md:gap-1 md:px-3">
+      <a href="#inbox" data-nav="inbox" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-xl md:px-3 md:py-2.5 md:text-sm md:hover:bg-white/5"><span data-icon="inbox"></span>Inbox</a>
+      <a href="#tarjetas" data-nav="tarjetas" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-xl md:px-3 md:py-2.5 md:text-sm md:hover:bg-white/5"><span data-icon="card"></span>Tarjetas</a>
+      <a href="#movimientos" data-nav="movimientos" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-xl md:px-3 md:py-2.5 md:text-sm md:hover:bg-white/5"><span data-icon="table"></span><span class="md:hidden">Movs.</span><span class="hidden md:inline">Movimientos</span></a>
+      <a href="#calendario" data-nav="calendario" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-xl md:px-3 md:py-2.5 md:text-sm md:hover:bg-white/5"><span data-icon="calendar"></span>Cuotas</a>
+      <a href="#resumen" data-nav="resumen" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-xl md:px-3 md:py-2.5 md:text-sm md:hover:bg-white/5"><span data-icon="chart"></span>Resumen</a>
+      <a href="#categorias" data-nav="categorias" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-xl md:px-3 md:py-2.5 md:text-sm md:hover:bg-white/5"><span data-icon="tag"></span><span class="md:hidden">Categ.</span><span class="hidden md:inline">Categorías</span></a>
+    </div>
+    <div class="mt-auto hidden flex-col gap-2 border-t border-white/5 p-3 md:flex">
       <button data-act="yape" type="button"
-        class="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:opacity-50">
+        class="btn-yape inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:opacity-50">
         <span data-icon="refresh"></span> Sincronizar Yape
       </button>
       <button data-act="logout" type="button"
-        class="inline-flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-400 hover:bg-slate-800 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400">
+        class="inline-flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-slate-400 transition hover:bg-white/5 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400">
         <span data-icon="logout"></span> Cerrar sesión
       </button>
     </div>
@@ -75,28 +193,33 @@
   <div id="toast" role="status" aria-live="polite"
     class="pointer-events-none fixed inset-x-4 bottom-24 z-50 mx-auto hidden max-w-sm rounded-xl border px-4 py-3 text-sm shadow-lg"></div>
 
-  <dialog id="setup" class="w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-0 text-slate-100">
+  <dialog id="setup" class="glass w-[calc(100%-2rem)] max-w-md rounded-2xl border border-white/10 p-0 text-slate-100">
     <form id="setup-form" class="space-y-4 p-6" autocomplete="off">
-      <div>
-        <h2 class="text-lg font-semibold">Conectar con tu API</h2>
-        <p class="mt-1 text-sm text-slate-400">Se guardan solo en este dispositivo (localStorage).</p>
+      <div class="flex items-center gap-3">
+        <span class="brand-mark flex h-10 w-10 items-center justify-center rounded-xl text-slate-950" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
+        </span>
+        <div>
+          <h2 class="text-lg font-semibold">Conectar con tu API</h2>
+          <p class="text-sm text-slate-400">Se guardan solo en este dispositivo (localStorage).</p>
+        </div>
       </div>
       <label class="block text-sm">URL de la Web App
         <input id="setup-url" type="url" required inputmode="url" placeholder="https://script.google.com/macros/s/…/exec"
-          class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-400">
+          class="field mt-1 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm focus:border-emerald-400/70 focus:outline-none focus:ring-2 focus:ring-emerald-400/20">
       </label>
       <label class="block text-sm">Token de seguridad
         <input id="setup-token" type="password" required minlength="24" autocomplete="off" autocapitalize="off" spellcheck="false"
-          class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-400">
+          class="field mt-1 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm focus:border-emerald-400/70 focus:outline-none focus:ring-2 focus:ring-emerald-400/20">
       </label>
-      <p id="setup-error" class="hidden rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200"></p>
+      <p id="setup-error" class="hidden rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200"></p>
       <button id="setup-submit" type="submit"
-        class="w-full rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 disabled:opacity-50">
+        class="btn-primary w-full rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 disabled:opacity-50">
         Verificar y guardar
       </button>
     </form>
   </dialog>
 
-  <script src="app.js?v=19" defer></script>
+  <script src="app.js?v=20" defer></script>
 </body>
 </html>

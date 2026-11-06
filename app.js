@@ -70,17 +70,45 @@
     return m ? `${m[3]}/${m[2]} ${m[4]}:${m[5]}` : (iso || '');
   };
 
-  const INPUT = 'w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-400';
-  const BTN = 'rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 disabled:cursor-not-allowed disabled:opacity-40';
-  const BTN_GHOST = 'rounded-lg border border-slate-700 px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400';
+  const INPUT = 'field w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-emerald-400/70 focus:outline-none focus:ring-2 focus:ring-emerald-400/20';
+  const BTN = 'btn-primary rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 disabled:cursor-not-allowed disabled:opacity-40';
+  const BTN_GHOST = 'btn-ghost rounded-xl border border-white/10 px-4 py-2.5 text-sm text-slate-200 hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400';
+
+  /* ---------- movimiento: cifras que «cuentan» hasta su valor (respeta «reducir movimiento») ---------- */
+  const REDUCED = (() => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; } })();
+  const lastShown = new Map(); // clave -> último valor mostrado: al cambiar de mes o agregar filas, anima desde el valor anterior
+  function countMoney(value, key) {
+    const el = document.createElement('span');
+    if (value == null) { el.textContent = '—'; return el; }
+    const from = key && lastShown.has(key) ? lastShown.get(key) : 0;
+    if (key) lastShown.set(key, value);
+    if (REDUCED || from === value) { el.textContent = fmtMoney(value); return el; }
+    const t0 = performance.now(), dur = 650;
+    el.textContent = fmtMoney(from);
+    const step = (t) => {
+      const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+      el.textContent = fmtMoney(p < 1 ? from + (value - from) * e : value);
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+    return el;
+  }
+  function doneState(msg) { // estado vacío «todo al día»
+    return h('div', { class: 'card rounded-2xl border border-slate-800 bg-slate-900 px-6 py-10 text-center text-slate-300' },
+      h('div', { class: 'done-badge mx-auto flex h-12 w-12 items-center justify-center rounded-full text-xl text-emerald-300', 'aria-hidden': 'true' }, '✓'),
+      h('p', { class: 'mt-3 text-sm' }, msg));
+  }
 
   /* ---------- toast ---------- */
   let toastTimer;
   function toast(msg, kind = 'ok') {
     const t = $('#toast');
-    t.textContent = msg;
-    t.className = 'pointer-events-none fixed inset-x-4 bottom-24 z-50 mx-auto max-w-sm rounded-xl border px-4 py-3 text-sm shadow-lg ' +
-      (kind === 'err' ? 'border-rose-500/50 bg-rose-950 text-rose-100' : 'border-emerald-500/50 bg-emerald-950 text-emerald-100');
+    t.replaceChildren(
+      h('span', { class: 'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ' + (kind === 'err' ? 'bg-rose-500/20 text-rose-200' : 'bg-emerald-500/20 text-emerald-200'), 'aria-hidden': 'true' }, kind === 'err' ? '!' : '✓'),
+      h('span', {}, msg));
+    t.className = 'glass pointer-events-none fixed inset-x-4 bottom-24 z-50 mx-auto flex max-w-sm items-center gap-3 rounded-2xl border px-4 py-3 text-sm shadow-2xl md:bottom-8 ' +
+      (kind === 'err' ? 'border-rose-500/40 text-rose-100' : 'border-emerald-500/40 text-emerald-50');
+    void t.offsetWidth; t.classList.add('toast-in'); // reinicia la animación de entrada
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => t.classList.add('hidden'), 3500);
   }
@@ -238,7 +266,13 @@
   }
 
   /* ---------- vista: Inbox ---------- */
-  function loading(text = 'Cargando…') { return h('p', { class: 'animate-pulse py-10 text-center text-sm text-slate-400' }, text); }
+  function loading(text = 'Cargando…') { // esqueleto con brillo mientras llegan los datos
+    return h('div', { class: 'space-y-3', role: 'status', 'aria-label': text },
+      h('div', { class: 'skel h-9 w-56' }),
+      h('div', { class: 'grid grid-cols-2 gap-3 sm:grid-cols-3' }, [0, 1, 2].map((i) => h('div', { class: 'skel h-20' + (i === 2 ? ' hidden sm:block' : '') }))),
+      [0, 1, 2, 3].map(() => h('div', { class: 'skel h-16' })),
+      h('p', { class: 'pt-1 text-center text-xs text-slate-500' }, text));
+  }
   function failure(e, retry) {
     return h('div', { class: 'rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-100' },
       h('p', {}, errText(e)),
@@ -302,7 +336,7 @@
     const data = inbox.data;
     if (!data.cards) return failure(data.cardsError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root));
     const items = unpaidList(data).sort((a, b) => (a.vence || a.fecha || '').localeCompare(b.vence || b.fecha || ''));
-    if (!items.length) return h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' }, h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'No hay consumos de crédito sin pagar.'));
+    if (!items.length) return doneState('No hay consumos de crédito sin pagar.');
     const total = items.reduce((s, p) => s + p.monto, 0);
     return h('div', {},
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Consumos de tarjeta aún sin pagar · total ', h('b', { class: 'text-slate-200' }, fmtMoney(total)), ' · marca ✓ cuando ya los pagaste.'),
@@ -315,7 +349,7 @@
             renderInbox(root);
           });
         });
-        return h('li', { class: 'flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
+        return h('li', { class: 'card card-hover flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
           h('div', { class: 'min-w-0 flex-1' },
             h('p', { class: 'truncate font-medium' }, p.detalle),
             h('p', { class: 'truncate text-xs text-slate-500' }, `${p.tarjeta} · ${fmtD(p.fecha)} · ${p.tipo}${p.vence ? ` · vence ${fmtD(p.vence)}` : ''}`)),
@@ -327,7 +361,7 @@
     const data = inbox.data;
     if (!data.cal) return failure(data.calError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root));
     const rows = dueFees(data);
-    if (!rows.length) return h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' }, h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'No quedan cuotas por pagar este mes.'));
+    if (!rows.length) return doneState('No quedan cuotas por pagar este mes.');
     const total = rows.reduce((s, r) => s + r.montos[0], 0);
     return h('div', {},
       h('p', { class: 'mb-3 text-sm text-slate-400' }, `Cuotas de ${data.cal.months[0]} sin pagar · total `, h('b', { class: 'text-slate-200' }, fmtMoney(total)), ' · marca ✓ cuando la pagues.'),
@@ -341,7 +375,7 @@
             r.pagadas[0] = true; toast(`Cuota pagada: ${r.compra}`); renderInbox(root);
           } catch (e) { box.checked = false; box.disabled = false; toast(errText(e), 'err'); }
         });
-        return h('li', { class: 'flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
+        return h('li', { class: 'card card-hover flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
           h('div', { class: 'min-w-0 flex-1' }, h('p', { class: 'truncate font-medium' }, r.compra), r.tarjeta && h('p', { class: 'truncate text-xs text-slate-500' }, r.tarjeta)),
           h('span', { class: 'tabular-nums' }, fmtMoney(r.montos[0])));
       })));
@@ -353,7 +387,7 @@
     if (!data.pend) return failure(data.pendError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root));
     const items = data.pend.items || [];
     const warn = data.pend.withoutId > 0 && h('p', { class: 'mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100' }, `${data.pend.withoutId} fila(s) pendientes sin ID no aparecen aquí. Ejecuta fosBackfillIds() en Apps Script.`);
-    if (!items.length) return h('div', {}, warn, h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' }, h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'No hay movimientos de crédito pendientes de procesar.')));
+    if (!items.length) return h('div', {}, warn, doneState('No hay movimientos de crédito pendientes de procesar.'));
     return h('div', {},
       warn,
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Movimientos de tarjeta con Estado «Pendiente». Marca ✓ los que ya figuran como procesados en la app del banco.'),
@@ -368,7 +402,7 @@
             toast(`Procesado: ${p.detalle}`); renderInbox(root);
           } catch (e) { box.checked = false; box.disabled = false; toast(errText(e), 'err'); }
         });
-        return h('li', { class: 'flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
+        return h('li', { class: 'card card-hover flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
           h('div', { class: 'min-w-0 flex-1' },
             h('p', { class: 'truncate font-medium' }, p.detalle),
             h('p', { class: 'truncate text-xs text-slate-500' }, `${p.tarjeta} · ${fmtDate(p.fecha)} · ${p.tipo}${p.cuotas ? ` · ${p.cuotas} cuotas` : ''}`)),
@@ -408,8 +442,7 @@
     } else {
       pruneStage(data);
       const list = h('ul', { class: 'grid gap-3 lg:grid-cols-2' });
-      const empty = h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' },
-        h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'Todo categorizado. No hay movimientos pendientes.'));
+      const empty = doneState('Todo categorizado. No hay movimientos pendientes.');
       const sync = () => { empty.classList.toggle('hidden', list.children.length > 0); refreshCounts(); };
       cur.items.forEach((it) => list.append(inboxCard(it, inbox.kind, bar.update)));
       const dups = inbox.kind === 'debito' && Array.isArray(cur.duplicados) ? cur.duplicados : [];
@@ -449,7 +482,7 @@
     const btn = h('button', { type: 'button', class: BTN + ' px-5' }, 'Guardar');
     const clear = h('button', { type: 'button', class: BTN_GHOST, onclick: () => { stage.debito = {}; stage.credito = {}; stage.errs = {}; saveStage(); renderInbox(root); } }, 'Descartar');
     const label = h('span', { class: 'text-sm text-slate-200' });
-    const el = h('div', { class: 'sticky bottom-20 z-20 mt-4 hidden items-center justify-between gap-3 rounded-xl border border-emerald-500/40 bg-slate-900/95 p-3 shadow-xl backdrop-blur md:bottom-4', role: 'region', 'aria-label': 'Cambios sin guardar' }, label, h('div', { class: 'flex gap-2' }, clear, btn));
+    const el = h('div', { class: 'glass save-bar sticky bottom-20 z-20 mt-4 hidden items-center justify-between gap-3 rounded-2xl border border-emerald-500/40 p-3 shadow-2xl md:bottom-4', role: 'region', 'aria-label': 'Cambios sin guardar' }, label, h('div', { class: 'flex gap-2' }, clear, btn));
     const update = () => {
       const n = stagedTotal();
       el.classList.toggle('hidden', n === 0); el.classList.toggle('flex', n > 0);
@@ -524,12 +557,12 @@
     const flag = h('span', { class: 'hidden rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300' }, '✓ listo');
     const errP = h('p', { class: 'mt-2 text-xs text-rose-300' }, stage.errs[it.id] || '');
     const chosen = () => (sel.value === NEW_CAT ? newInp.value.trim() : sel.value);
-    const li = h('li', { class: 'rounded-xl border bg-slate-900 p-4' });
+    const li = h('li', { class: 'card card-hover rounded-xl border bg-slate-900 p-4' });
     const paint = () => {
       const s = stage[kind][it.id];
       emoBox.classList.toggle('hidden', !isNewName());
       flag.classList.toggle('hidden', !s);
-      li.className = 'rounded-xl border bg-slate-900 p-4 ' + (s ? 'border-emerald-500/50' : 'border-slate-800');
+      li.className = 'card card-hover rounded-xl border bg-slate-900 p-4 ' + (s ? 'border-emerald-500/50 is-staged' : 'border-slate-800');
       payBtn.textContent = s && s.pago ? '✓ Marcado como pago de tarjeta (quitar)' : 'Es un pago de tarjeta (no es gasto)';
       errP.classList.toggle('hidden', !errP.textContent);
     };
@@ -678,13 +711,13 @@
   });
 
   // con el panel abierto, el contenido usa todo el ancho que queda a su izquierda (sin centrarse ni dejar huecos)
-  const drawerLayout = (on) => { const v = $('#view'); if (v) ['md:!mr-[30rem]', 'md:!max-w-none', 'md:!mx-0'].forEach((c) => v.classList.toggle(c, !!on)); };
+  const drawerLayout = (on) => { ['#view', '#page-head'].forEach((s) => { const v = $(s); if (v) ['md:!mr-[30rem]', 'md:!max-w-none', 'md:!mx-0'].forEach((c) => v.classList.toggle(c, !!on)); }); };
 
   function buildMov(root) {
     const d = () => mov.d;
     const tilesBox = h('div', { class: 'mb-3 grid grid-cols-3 gap-2' });
     const info = h('p', { class: 'my-2 text-sm text-slate-400', 'aria-live': 'polite' });
-    const wrap = h('div', { class: 'max-h-[62vh] overflow-auto rounded-xl border border-slate-800 bg-slate-900' });
+    const wrap = h('div', { class: 'card max-h-[62vh] overflow-auto rounded-xl border border-slate-800 bg-slate-900' });
     const more = h('button', { type: 'button', class: BTN_GHOST + ' mt-3 hidden', onclick: () => { mov.limit += 200; drawTable(); } }, 'Mostrar más');
     const controls = h('div', { class: 'mb-3 space-y-2' });
     const drawerBox = h('div', {});
@@ -730,9 +763,9 @@
       const filtered = !!(mov.mes || mov.q);
       const base = filtered && !D.truncated ? scopeTotals(D, scopeRows()) : D.totales;
       const fx = draftEffect(mov.mes);
-      const tile = (label, v, after, tone, note) => h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-3' },
+      const tile = (label, v, after, tone, note) => h('div', { class: 'card rounded-xl border border-slate-800 bg-slate-900 p-3' },
         h('p', { class: 'text-xs text-slate-400' }, label),
-        h('p', { class: 'mt-1 text-lg font-semibold tabular-nums sm:text-xl ' + tone }, fmtMoney(v)),
+        h('p', { class: 'mt-1 text-lg font-semibold tabular-nums tracking-tight sm:text-2xl ' + tone }, countMoney(v, `mov:${label}`)),
         after != null && fx.n ? h('p', { class: 'text-xs tabular-nums text-amber-300' }, `quedaría ${fmtMoney(after)}`) : null,
         note ? h('p', { class: 'text-[11px] text-slate-500' }, note) : null);
       const third = cred ? D.totales.saldo : base.neto;
@@ -887,7 +920,7 @@
         : Object.assign(base, { tipo: last && (last.tipo === 'Directo' || last.tipo === 'Cuotas') ? last.tipo : 'Directo', cuotas: '', pagado: false });
     }
     function toggleDrawer(on) {
-      mov.drawer = on;
+      mov.drawer = on; mov.drawerAnim = on;
       if (on && !draftList().length) draftList().push(newDraft());
       drawerLayout(on);
       drawControls(); drawDrawer();
@@ -990,7 +1023,7 @@
       }
       const btn = h('button', { type: 'button', class: BTN + ' w-full', onclick: register }, 'Registrar todo');
       const count = () => list.filter((r) => !draftProblem(r)).length;
-      const panel = h('aside', { 'aria-label': 'Cargar movimientos', class: 'fixed inset-x-0 bottom-0 z-40 flex max-h-[85vh] flex-col rounded-t-2xl border border-slate-700 bg-slate-950 shadow-2xl md:inset-y-0 md:left-auto md:right-0 md:max-h-none md:w-[30rem] md:rounded-none md:border-y-0 md:border-r-0' },
+      const panel = h('aside', { 'aria-label': 'Cargar movimientos', class: 'glass glass-strong ' + (mov.drawerAnim ? 'drawer-in ' : '') + 'fixed inset-x-0 bottom-0 z-40 flex max-h-[85vh] flex-col rounded-t-2xl border border-white/10 shadow-2xl md:inset-y-0 md:left-auto md:right-0 md:max-h-none md:w-[30rem] md:rounded-none md:border-y-0 md:border-r-0' },
         h('div', { class: 'flex items-center justify-between border-b border-slate-800 px-4 py-3' },
           h('div', {}, h('h2', { class: 'text-sm font-semibold' }, `Cargar movimientos · ${D.cuenta}`), h('p', { class: 'text-xs text-slate-400' }, 'Ve anotando fila por fila y registra todo de una vez.')),
           h('button', { type: 'button', class: 'rounded-md px-2 py-1 text-slate-300 hover:bg-slate-800', 'aria-label': 'Cerrar panel', onclick: () => toggleDrawer(false) }, '✕')),
@@ -1002,6 +1035,7 @@
             h('button', { type: 'button', class: BTN_GHOST, onclick: () => { if (list.some((r) => r.monto || r.detalle) && !confirm('¿Borrar todas las filas sin registrar?')) return; mov.drafts[dkey()] = [newDraft()]; saveMov(); drawDrawer(); drawTiles(); } }, 'Limpiar'))),
         h('div', { class: 'border-t border-slate-800 p-3' }, btn));
       bancoIn.id = 'banco-in';
+      mov.drawerAnim = false; // solo se anima al abrirlo, no en cada repintado
       drawerBox.replaceChildren(panel);
       drawRows(); preview();
     }
@@ -1013,7 +1047,7 @@
   /* ---------- vista: Categorías (editar nombre y emoji; el emoji es obligatorio) ---------- */
   function openCatEditor(item, d, root) {
     const isNew = !item;
-    const dlg = h('dialog', { class: 'w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-0 text-slate-100', 'aria-label': isNew ? 'Nueva categoría' : `Editar ${item.nombre}` });
+    const dlg = h('dialog', { class: 'glass w-[calc(100%-2rem)] max-w-md rounded-2xl border border-white/10 p-0 text-slate-100', 'aria-label': isNew ? 'Nueva categoría' : `Editar ${item.nombre}` });
     const name = h('input', { class: INPUT, value: isNew ? '' : item.nombre, maxlength: '40', required: true, 'aria-label': 'Nombre de la categoría' });
     const emo = h('input', { class: INPUT + ' w-24 text-center text-2xl', value: isNew ? '' : (item.emoji || ''), placeholder: '😀', maxlength: '16', required: true, 'aria-label': 'Emoji (obligatorio)' });
     const tipoDefault = isNew ? '' : (item.tipo || (item.tipoUso === 'Egreso' || item.tipoUso === 'Ingreso' ? item.tipoUso : ''));
@@ -1087,8 +1121,8 @@
     const tabs = [['todas', `Todas ${d.items.length}`], ['Egreso', `Egresos ${count('Egreso')}`], ['Ingreso', `Ingresos ${count('Ingreso')}`], ...(count('sin') ? [['sin', `Sin tipo ${count('sin')}`]] : [])];
     root.replaceChildren(...[
       h('div', { class: 'mb-3 flex items-center justify-between gap-2' },
-        h('h2', { class: 'text-base font-semibold' }, 'Categorías'),
-        h('button', { type: 'button', class: BTN + ' !px-3 !py-1.5', onclick: () => openCatEditor(null, d, root) }, '+ Nueva')),
+        h('h2', { class: 'text-base font-semibold md:hidden' }, 'Categorías'),
+        h('button', { type: 'button', class: BTN + ' ml-auto !px-3 !py-1.5', onclick: () => openCatEditor(null, d, root) }, '+ Nueva')),
       incompletas.length > 0 && h('p', { class: 'mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100', role: 'status' },
         `${incompletas.length} categoría(s) incompletas (sin emoji o sin tipo). Complétalas con Editar.`),
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Cada categoría es de Egreso o de Ingreso: en el Inbox solo se ofrecen las que corresponden al signo del movimiento. Renombrar cambia todos sus movimientos, en Débito y en Crédito por separado.'),
@@ -1096,7 +1130,7 @@
         h('button', { type: 'button', role: 'tab', 'aria-selected': catUi.filtro === k ? 'true' : 'false', onclick: () => { catUi.filtro = k; paintCategories(root, d); },
           class: 'rounded-lg px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (catUi.filtro === k ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200') }, label))),
       h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, shown.map((i) =>
-        h('li', { class: 'flex items-center gap-3 rounded-xl border bg-slate-900 p-3 ' + (i.emoji && i.tipo ? 'border-slate-800' : 'border-amber-500/50') },
+        h('li', { class: 'card card-hover flex items-center gap-3 rounded-xl border bg-slate-900 p-3 ' + (i.emoji && i.tipo ? 'border-slate-800' : 'border-amber-500/50') },
           h('span', { class: 'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-2xl', 'aria-hidden': i.emoji ? 'true' : null }, i.emoji || '❔'),
           h('div', { class: 'min-w-0 flex-1' },
             h('p', { class: 'flex items-center gap-2 truncate font-medium' }, i.nombre,
@@ -1125,7 +1159,7 @@
     const cell = 'px-3 py-2 text-right tabular-nums whitespace-nowrap';
     const hi = (i) => (i === curIdx ? ' bg-emerald-500/10 border-x border-emerald-500/40' : '');
     const summary = h('p', { class: 'mb-3 text-sm text-slate-400' });
-    const wrap = h('div', { class: 'overflow-x-auto rounded-xl border border-slate-800 bg-slate-900', 'aria-label': 'Calendario de cuotas' });
+    const wrap = h('div', { class: 'card overflow-x-auto rounded-xl border border-slate-800 bg-slate-900', 'aria-label': 'Calendario de cuotas' });
     let firstDraw = true;
 
     function draw() {
@@ -1181,7 +1215,7 @@
 
     draw();
     root.replaceChildren(
-      h('h2', { class: 'mb-1 text-base font-semibold' }, 'Calendario de cuotas'),
+      h('h2', { class: 'mb-1 text-base font-semibold md:hidden' }, 'Calendario de cuotas'),
       summary,
       h('p', { class: 'mb-2 text-xs text-slate-500' }, 'Toca una cuota para marcarla como pagada.'),
       wrap);
@@ -1233,7 +1267,7 @@
       })));
     if (details) details.addEventListener('toggle', () => cardsUi.open.set(c.tarjeta, details.open));
 
-    return h('section', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-4' },
+    return h('section', { class: 'card rounded-xl border border-slate-800 bg-slate-900 p-4' },
       h('div', { class: 'flex items-baseline justify-between' },
         h('h3', { class: 'font-semibold' }, c.tarjeta),
         h('span', { class: 'text-xs text-slate-500' }, `Límite ${fmtMoney(c.limite)}`)),
@@ -1242,7 +1276,7 @@
           h('span', { class: 'text-slate-300' }, 'Utilización al corte'),
           h('span', { class: 'font-semibold tabular-nums' }, pct(c.utilizacion))),
         h('div', { class: 'relative mt-1.5 h-2 rounded-full bg-slate-800', role: 'img', 'aria-label': `Utilización ${pct(c.utilizacion)}, meta ${pct(c.meta)}` },
-          h('div', { class: 'h-2 rounded-full ' + TONE[tone], style: `width:${Math.min(100, (c.utilizacion / scale) * 100)}%` }),
+          h('div', { class: 'bar-grow h-2 rounded-full ' + TONE[tone], style: `width:${Math.min(100, (c.utilizacion / scale) * 100)}%` }),
           h('div', { class: 'absolute -top-1 h-4 w-0.5 bg-slate-200', style: `left:${(c.meta / scale) * 100}%`, title: `Meta ${pct(c.meta)}` })),
         h('p', { class: 'mt-1 text-xs text-slate-500' }, `Meta ${pct(c.meta)} = ${fmtMoney(c.metaMonto)} · tras pagar los consumos: ${pct(c.utilizacionTrasPagar)}`)),
       h('div', { class: 'mt-3 divide-y divide-slate-800' },
@@ -1274,7 +1308,7 @@
   }
   function paintCards(root, d) {
     root.replaceChildren(
-      h('h2', { class: 'mb-1 text-base font-semibold' }, 'Tarjetas'),
+      h('h2', { class: 'mb-1 text-base font-semibold md:hidden' }, 'Tarjetas'),
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Meta: al corte, solo la cuota del mes; el resto de consumos en 0.'),
       h('div', { class: 'grid gap-3 lg:grid-cols-2 lg:items-start' }, d.cards.map((c) => cardPanel(c, () => viewCards(root, true)))));
   }
@@ -1290,9 +1324,9 @@
       const diff = Math.round((value - prev) * 100) / 100;
       delta = diff === 0 ? 'igual que el mes anterior' : `${diff > 0 ? '+' : '−'}${fmtMoney(Math.abs(diff))} vs mes anterior`;
     }
-    return h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-3' },
+    return h('div', { class: 'card rounded-xl border border-slate-800 bg-slate-900 p-3' },
       h('div', { class: 'text-xs text-slate-400' }, label),
-      h('div', { class: 'mt-1 text-xl font-semibold tabular-nums text-slate-100' }, value == null ? '—' : fmtMoney(value)),
+      h('div', { class: 'mt-1 text-xl font-semibold tabular-nums tracking-tight text-slate-50 sm:text-2xl' }, countMoney(value, `sum:${label}`)),
       (delta || note) && h('div', { class: 'mt-0.5 text-xs text-slate-500' }, delta || note));
   }
 
@@ -1307,7 +1341,7 @@
           h('span', { class: 'truncate text-slate-200' }, labelKey === 'categoria' ? catLabel(r[labelKey]) : r[labelKey]),
           h('span', { class: 'shrink-0 tabular-nums text-slate-300' }, `${fmtMoney(r.monto)} · ${total ? Math.round((r.monto / total) * 100) : 0}%`)),
         h('div', { class: 'mt-1 h-2 rounded-r bg-slate-800', role: 'presentation' },
-          h('div', { class: 'h-2 rounded-r', style: `width:${Math.max(2, (r.monto / max) * 100)}%;background:${gray ? '#64748b' : '#3987e5'}` })));
+          h('div', { class: 'bar-grow h-2 rounded-r', style: `width:${Math.max(2, (r.monto / max) * 100)}%;background:${gray ? '#64748b' : 'linear-gradient(90deg,#059669,#34d399)'}` })));
     }));
   }
 
@@ -1402,9 +1436,9 @@
     const rollover = () => { if (done.date !== today()) { done = { date: today(), items: [] }; save(); } };
 
     const fab = h('button', { type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', title: 'Cuadre diario',
-      class: 'fixed bottom-6 right-6 z-40 hidden items-center gap-2 rounded-full border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-medium text-slate-100 shadow-xl hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 md:flex' });
+      class: 'glass fixed bottom-6 right-6 z-40 hidden items-center gap-2 rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-slate-100 shadow-2xl transition hover:-translate-y-0.5 hover:border-emerald-400/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 md:flex' });
     const panel = h('div', { role: 'dialog', 'aria-label': 'Cuadre diario', class: 'hidden' });
-    const PANEL = 'fixed bottom-20 right-6 z-40 w-80 rounded-2xl border border-slate-700 bg-slate-900 p-4 shadow-2xl ';
+    const PANEL = 'glass glass-strong pop-in fixed bottom-20 right-6 z-40 w-80 rounded-2xl border border-white/10 p-4 shadow-2xl ';
 
     const list = () => accounts || FALLBACK;
     const pending = () => list().filter((a) => !done.items.includes(a)).length;
@@ -1513,12 +1547,33 @@
   /* ---------- router ---------- */
   const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: (root) => { mov.drawer = true; history.replaceState(null, '', '#movimientos'); return viewHistory(root); }, calendario: viewCalendar, resumen: viewSummary, movimientos: viewHistory, categorias: viewCategories };
   const currentView = () => { const v = location.hash.slice(1); return VIEWS[v] ? v : 'inbox'; };
+  const TITLES = { inbox: ['Inbox', 'Tu revisión del día'], tarjetas: ['Tarjetas', 'Ciclo, utilización y lo que toca pagar'], movimientos: ['Movimientos', 'Una cuenta a la vez, editable en la celda'],
+    nuevo: ['Movimientos', 'Una cuenta a la vez, editable en la celda'], calendario: ['Cuotas', 'Calendario de cuotas por mes'], resumen: ['Resumen', 'Débito y Crédito, cada uno por su lado'], categorias: ['Categorías', 'Nombre, emoji y tipo de cada categoría'] };
+  const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  function paintHead(v) {
+    const d = new Date(), hr = d.getHours();
+    const saludo = hr < 12 ? 'Buenos días' : hr < 19 ? 'Buenas tardes' : 'Buenas noches';
+    const [title, sub] = TITLES[v] || TITLES.inbox;
+    const k = $('#page-kicker'), t = $('#page-title'), s = $('#page-sub');
+    if (k) k.textContent = `${saludo} · ${DIAS[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]}`;
+    if (t) t.textContent = title;
+    if (s) s.textContent = sub;
+    const mt = $('#mobile-title'); if (mt) mt.textContent = title;
+  }
+  let enterTimer;
+  function animateEnter() { // entrada suave solo al cambiar de sección (no en cada repintado)
+    if (REDUCED) return;
+    ['#view', '#page-head'].forEach((s) => { const el = $(s); if (!el) return; el.classList.remove('view-enter'); void el.offsetWidth; el.classList.add('view-enter'); });
+    clearTimeout(enterTimer);
+    enterTimer = setTimeout(() => ['#view', '#page-head'].forEach((s) => { const el = $(s); if (el) el.classList.remove('view-enter'); }), 1100);
+  }
   function route() {
     navTok++;
     drawerLayout(false);
     daily.sync();
     if (!hasCreds()) { openSetup(); return; }
     const v = currentView();
+    paintHead(v); animateEnter();
     document.querySelectorAll('[data-nav]').forEach((a) => {
       const on = a.dataset.nav === (v === 'nuevo' ? 'movimientos' : v);
       a.classList.toggle('text-emerald-400', on); a.classList.toggle('text-slate-400', !on);
