@@ -50,7 +50,7 @@
     table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16"/>',
     tag: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r=".5"/>',
     chart: '<path d="M3 3v18h18"/><path d="M7 15v3M12 9v9M17 5v13"/>',
-    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
+    sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/><path d="M15 10l-2 2 2 2"/>',
   };
   function icon(name) {
     const s = document.createElement('span');
@@ -282,7 +282,7 @@
   const inbox = { kind: 'debito', phase: 1, data: null };
   const KINDS = [['debito', 'Débito'], ['credito', 'Crédito']];
 
-  const INBOX_CALLS = ['getInbox', 'getCreditInbox', 'getCards', 'getCalendar', 'getPendingEstado'];
+  const INBOX_CALLS = ['getInbox', 'getCreditInbox', 'getCards', 'getCalendar', 'getPendingEstado', 'getSummary'];
   // Una sola petición para todo el Inbox. Si el backend aún no tiene `batch`, cae a llamadas sueltas.
   async function fetchInboxRaw() {
     try {
@@ -294,10 +294,11 @@
     }
   }
   function shapeInbox(results) {
-    const [d, c, cards, cal, pend] = results;
+    const [d, c, cards, cal, pend, sum] = results;
     const ok = (r) => (r.ok ? r.data : null), err = (r) => (r.ok ? null : new ApiError(r.error, r.message));
     if (!d.ok) throw new ApiError(d.error, d.message);
     return {
+      sum: sum && sum.ok ? sum.data : null, // resumen del mes actual: su «cierre» es el neto actual de Débito
       debito: d.data, credito: ok(c), creditoError: err(c), cards: ok(cards), cardsError: err(cards),
       cal: ok(cal), calError: err(cal), pend: ok(pend), pendError: err(pend),
     };
@@ -410,11 +411,29 @@
       })));
   }
 
+  /* Indicadores del Inbox: Débito y Crédito se muestran por separado; la liquidez real es solo su diferencia (no se suman). */
+  function liquidity(data) {
+    const deb = data.sum && data.sum.debito ? data.sum.debito.cierre : null;                 // neto actual de todas las cuentas de Débito
+    const porPagar = data.cards ? r2(unpaidList(data).reduce((s, p) => s + p.monto, 0)) : null; // fase 2: créditos por pagar
+    const cuotas = data.cal ? r2(dueFees(data).reduce((s, r) => s + r.montos[0], 0)) : null;    // fase 3: cuotas del mes sin pagar
+    const cred = porPagar == null || cuotas == null ? null : r2(porPagar + cuotas);
+    const liq = deb == null || cred == null ? null : r2(deb - cred);
+    const tile = (label, v, note, tone, extra = '') => h('div', { class: 'card rounded-2xl border border-slate-800 bg-slate-900 p-3 sm:p-4 ' + extra },
+      h('p', { class: 'text-xs font-medium text-slate-400' }, label),
+      h('p', { class: 'mt-1 text-xl font-semibold tabular-nums tracking-tight sm:text-2xl ' + tone }, countMoney(v, `inbox:${label}`)),
+      h('p', { class: 'mt-0.5 truncate text-[11px] text-slate-500' }, note));
+    return h('div', { class: 'mb-4 grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3', role: 'group', 'aria-label': 'Liquidez' },
+      tile('Restante débito', deb, deb == null ? 'sin datos del resumen' : 'neto actual de tus cuentas', 'text-slate-50'),
+      tile('Total crédito', cred, cred == null ? 'sin datos de tarjetas' : `por pagar ${fmtMoney(porPagar)} + cuotas ${fmtMoney(cuotas)}`, 'text-rose-300'),
+      tile('Liquidez real', liq, 'restante débito − total crédito', liq == null ? 'text-slate-50' : liq < 0 ? 'text-rose-300' : 'text-emerald-300', 'liq-tile col-span-2 md:col-span-1'));
+  }
+  const refreshBar = (root) => h('div', { class: 'mb-3 flex justify-end' }, h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar'));
+
   function renderInbox(root) {
     const data = inbox.data;
     if (inbox.phase !== 1) {
       root.replaceChildren(
-        h('div', { class: 'mb-3 flex justify-end' }, h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar')),
+        liquidity(data), refreshBar(root),
         phaseBar(root), inbox.phase === 2 ? phasePay(root) : inbox.phase === 3 ? phaseFees(root) : phaseProcess(root));
       return;
     }
@@ -456,11 +475,10 @@
     }
 
     root.replaceChildren(...[
-      h('div', { class: 'mb-3 flex items-center justify-between gap-2' },
-        h('div', { class: 'grid grid-cols-2 gap-1 rounded-xl bg-slate-900 p-1', role: 'tablist' }, KINDS.map(tab)),
-        h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar')),
+      liquidity(data), refreshBar(root), phaseBar(root, badge1),
+      h('div', { class: 'mb-3 flex' },
+        h('div', { class: 'grid grid-cols-2 gap-1 rounded-xl bg-slate-900 p-1', role: 'tablist' }, KINDS.map(tab))),
       body, bar.el].filter(Boolean));
-    root.prepend(phaseBar(root, badge1));
     refreshCounts(); bar.update();
   }
 
@@ -696,8 +714,9 @@
   }
 
   const MOV_COLS = {
-    debito: [['fecha', 'Fecha', 'Fecha', 'dt'], ['detalle', 'Detalle', 'Detalle/Comercio', 'text'], ['desc', 'Descripción', 'Descripción', 'ro'], ['categoria', 'Categoría', 'Categoría', 'cat'],
-      ['monto', 'Monto', 'Monto', 'money'], ['comentario', 'Comentario', 'Comentario', 'text']],
+    // En Débito la nota editable es la columna «Descripción» de la hoja (el ETL la llena con el concepto de Yape)
+    debito: [['fecha', 'Fecha', 'Fecha', 'dt'], ['detalle', 'Detalle', 'Detalle/Comercio', 'text'], ['categoria', 'Categoría', 'Categoría', 'cat'],
+      ['monto', 'Monto', 'Monto', 'money'], ['descripcion', 'Descripción', 'Descripción', 'text']],
     credito: [['fecha', 'Fecha', 'Fecha', 'dt'], ['detalle', 'Detalle', 'Detalle/Comercio', 'text'], ['modalidad', 'Modalidad', 'Modalidad', 'ro'], ['cuotas', 'Cuotas', 'N° Cuotas', 'ro'],
       ['categoria', 'Categoría', 'Categoría', 'cat'], ['monto', 'Monto', 'Monto', 'money'], ['estado', 'Estado', 'Estado', 'estado'], ['pagado', 'Pagado', 'Pagado', 'bool'], ['comentario', 'Comentario', 'Comentario', 'text']],
   };
@@ -884,13 +903,15 @@
           td.replaceChildren(sel); sel.focus();
         } });
       }
-      // texto libre: detalle / comentario
-      td.className += (key === 'comentario' ? 'text-slate-400 ' : 'text-slate-200 ') + dim;
-      if (key === 'detalle' && td.className) td.className += ' max-w-[18rem] truncate';
-      td.textContent = blank ? (key === 'comentario' ? '＋ comentario' : '·') : String(v);
+      // texto libre: detalle / nota (Comentario en Crédito, Descripción en Débito)
+      const isNote = key === 'comentario' || key === 'descripcion';
+      const noteLabel = key === 'descripcion' ? 'descripción' : 'comentario';
+      td.className += (isNote ? 'text-slate-400 ' : 'text-slate-200 ') + dim;
+      if ((key === 'detalle' || isNote) && td.className) td.className += ' max-w-[18rem] truncate';
+      td.textContent = blank ? (isNote ? `＋ ${noteLabel}` : '·') : String(v);
       if (blank) td.className += ' text-slate-600';
-      const canEdit = !lockedBase && !(lockAll && key !== 'comentario');
-      return editable(td, { locked: !canEdit, lockTitle, edit: () => inlineInput(td, { type: 'text', value: v == null ? '' : String(v), attrs: { maxlength: key === 'detalle' ? '120' : '200', placeholder: key === 'comentario' ? 'Comentario' : '' },
+      const canEdit = !lockedBase && !(lockAll && !isNote);
+      return editable(td, { locked: !canEdit, lockTitle, edit: () => inlineInput(td, { type: 'text', value: v == null ? '' : String(v), attrs: { maxlength: key === 'detalle' ? '120' : '200', placeholder: isNote ? noteLabel[0].toUpperCase() + noteLabel.slice(1) : '' },
         onCommit: (nv) => {
           const t = nv.trim();
           if (key === 'detalle' && !t) { toast('El detalle no puede quedar vacío.', 'err'); return drawTable(); }
@@ -990,7 +1011,7 @@
           h('div', { class: 'mt-2 flex flex-wrap items-center gap-2' }, noCat ? null : cat,
             cred && r.tipo === 'Cuotas' ? inp('cuotas', 'number', 'w-20', { min: '2', max: '48', placeholder: 'cuotas' }) : null,
             cred && r.tipo === 'Directo' ? h('label', { class: 'flex items-center gap-1 whitespace-nowrap text-xs text-slate-300' }, (() => { const c = h('input', { type: 'checkbox', class: 'h-4 w-4 accent-emerald-500' }); c.checked = !!r.pagado; c.addEventListener('change', () => { r.pagado = c.checked; saveMov(); }); return c; })(), 'ya pagado') : null,
-            inp('comentario', 'text', 'min-w-[8rem] flex-1', { placeholder: 'Comentario', maxlength: '200' })),
+            inp('comentario', 'text', 'min-w-[8rem] flex-1', { placeholder: cred ? 'Comentario' : 'Descripción', maxlength: '200' })),
           r.err ? h('p', { class: 'mt-1 text-xs text-rose-300' }, r.err) : null,
         ].filter(Boolean));
         return wrapEl;
@@ -1005,7 +1026,7 @@
         try {
           const payload = (r) => (cred
             ? { id: r.id, fecha: r.fecha, tipo: r.tipo === 'Abono' ? 'Ingreso' : 'Egreso', monto: draftMonto(r), detalle: r.detalle.trim(), categoria: r.categoria, comentario: r.comentario.trim(), modalidad: r.tipo === 'Cuotas' ? 'Cuotas Sin Interes' : 'Directo', cuotas: r.tipo === 'Cuotas' ? Number(r.cuotas) : null, pagado: r.tipo === 'Directo' && !!r.pagado }
-            : { id: r.id, fecha: r.fecha, tipo: r.tipo === 'Ingreso' ? 'Ingreso' : 'Egreso', monto: draftMonto(r), detalle: r.tipo === 'Pago' ? '' : r.detalle.trim(), categoria: r.categoria, comentario: r.comentario.trim(), tarjeta: r.tipo === 'Pago' ? r.tarjeta : undefined });
+            : { id: r.id, fecha: r.fecha, tipo: r.tipo === 'Ingreso' ? 'Ingreso' : 'Egreso', monto: draftMonto(r), detalle: r.tipo === 'Pago' ? '' : r.detalle.trim(), categoria: r.categoria, descripcion: r.comentario.trim(), tarjeta: r.tipo === 'Pago' ? r.tarjeta : undefined }); // en Débito la nota va a «Descripción»
           for (let i = 0; i < todo.length; i += 50) {
             const chunk = todo.slice(i, i + 50);
             const res = await api('addMovimientos', { hoja: mov.hoja, cuenta: D.cuenta, rows: chunk.map(payload) });
@@ -1555,7 +1576,7 @@
     const saludo = hr < 12 ? 'Buenos días' : hr < 19 ? 'Buenas tardes' : 'Buenas noches';
     const [title, sub] = TITLES[v] || TITLES.inbox;
     const k = $('#page-kicker'), t = $('#page-title'), s = $('#page-sub');
-    if (k) k.textContent = `${saludo} · ${DIAS[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]}`;
+    if (k) { k.textContent = `${saludo} · ${DIAS[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]}`; k.classList.toggle('hidden', v !== 'inbox'); } // el saludo solo en Inbox
     if (t) t.textContent = title;
     if (s) s.textContent = sub;
     const mt = $('#mobile-title'); if (mt) mt.textContent = title;
@@ -1582,16 +1603,35 @@
     VIEWS[v]($('#view'));
   }
 
+  /* ---------- menú lateral plegable (PC): se pliega solo bajo 1280 px; tu elección se respeta hasta cruzar ese ancho ---------- */
+  function initNav() {
+    const NAV_KEY = 'fos.nav';
+    let mq; try { mq = matchMedia('(max-width: 1279px)'); } catch { return; }
+    const band = () => (mq.matches ? 'narrow' : 'wide');
+    const btn = $('[data-act=nav-toggle]');
+    const apply = (collapsed) => {
+      document.body.classList.toggle('nav-collapsed', collapsed);
+      if (btn) { const t = collapsed ? 'Mostrar menú' : 'Ocultar menú'; btn.setAttribute('aria-label', t); btn.title = t; btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true'); }
+    };
+    const saved = () => { try { const p = JSON.parse(ls.get(NAV_KEY)); return p && p.band === band() ? !!p.collapsed : null; } catch { return null; } };
+    const s = saved();
+    apply(s === null ? mq.matches : s);
+    const onChange = () => { ls.del(NAV_KEY); apply(mq.matches); }; // al cruzar el ancho vuelve al modo automático
+    if (mq.addEventListener) mq.addEventListener('change', onChange); else mq.addListener(onChange);
+    if (btn) btn.addEventListener('click', () => {
+      const collapsed = !document.body.classList.contains('nav-collapsed');
+      ls.set(NAV_KEY, JSON.stringify({ band: band(), collapsed }));
+      apply(collapsed);
+    });
+  }
+
   /* ---------- arranque ---------- */
   document.addEventListener('DOMContentLoaded', () => {
     hydrateIcons();
+    initNav();
     daily.mount();
     initSetup();
     document.querySelectorAll('[data-act=yape]').forEach((b) => b.addEventListener('click', syncYape));
-    document.querySelectorAll('[data-act=logout]').forEach((b) => b.addEventListener('click', () => {
-      if (!confirm('¿Cerrar sesión en este dispositivo? Se borrará el token guardado.')) return;
-      ls.del(KEYS.token); cacheClear(); $('#view').replaceChildren(); openSetup();
-    }));
     window.addEventListener('hashchange', route);
     boot();
     if ('serviceWorker' in navigator && location.protocol === 'https:') {
