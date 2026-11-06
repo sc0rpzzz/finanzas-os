@@ -366,7 +366,7 @@
     const total = items.reduce((s, p) => s + p.monto, 0);
     return h('div', {},
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Consumos de tarjeta aún sin pagar · total ', h('b', { class: 'text-slate-200' }, fmtMoney(total)), ' · marca ✓ cuando ya los pagaste.'),
-      h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, items.map((p) => {
+      h('ul', { class: 'grid gap-2 lg:grid-cols-2 2xl:grid-cols-3' }, items.map((p) => {
         const box = h('input', { type: 'checkbox', class: 'h-5 w-5 shrink-0 accent-emerald-500', disabled: !p.id, 'aria-label': `Marcar como pagado: ${p.detalle}` });
         box.addEventListener('change', () => {
           if (!box.checked) return;
@@ -392,7 +392,7 @@
     const total = rows.reduce((s, r) => s + Math.abs(r.montos[0]), 0); // por pagar: en positivo, como la fase 2
     return h('div', {},
       h('p', { class: 'mb-3 text-sm text-slate-400' }, `Cuotas de ${data.cal.months[0]} sin pagar · total `, h('b', { class: 'text-slate-200' }, fmtMoney(total)), ' · marca ✓ cuando la pagues.'),
-      h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, rows.map((r) => {
+      h('ul', { class: 'grid gap-2 lg:grid-cols-2 2xl:grid-cols-3' }, rows.map((r) => {
         const box = h('input', { type: 'checkbox', class: 'h-5 w-5 shrink-0 accent-emerald-500', disabled: !r.id, 'aria-label': `Marcar cuota pagada: ${r.compra}` });
         box.addEventListener('change', async () => {
           if (!box.checked) return;
@@ -418,7 +418,7 @@
     return h('div', {},
       warn,
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Movimientos de tarjeta con Estado «Pendiente». Marca ✓ los que ya figuran como procesados en la app del banco.'),
-      h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, items.map((p) => {
+      h('ul', { class: 'grid gap-2 lg:grid-cols-2 2xl:grid-cols-3' }, items.map((p) => {
         const box = h('input', { type: 'checkbox', class: 'h-5 w-5 shrink-0 accent-emerald-500', 'aria-label': `Marcar como procesado: ${p.detalle}` });
         box.addEventListener('change', async () => {
           if (!box.checked) return;
@@ -454,7 +454,8 @@
       tile('Total crédito', cred, cred == null ? 'sin datos de tarjetas' : `por pagar ${fmtMoney(porPagar)} + cuotas ${fmtMoney(cuotas)}`, 'text-rose-300'),
       tile('Liquidez real', liq, 'restante débito − total crédito', liq == null ? 'text-slate-50' : liq < 0 ? 'text-rose-300' : 'text-emerald-300', 'liq-tile col-span-2 md:col-span-1'));
   }
-  const refreshBar = (root) => h('div', { class: 'mb-3 flex justify-end' }, h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar'));
+  // en el celular; en PC el «Actualizar» va en el encabezado de la sección
+  const refreshBar = (root) => h('div', { class: 'mb-3 flex justify-end md:hidden' }, h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar'));
 
   function renderInbox(root) {
     const data = inbox.data;
@@ -487,7 +488,7 @@
       body.append(failure(data.creditoError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root)));
     } else {
       pruneStage(data);
-      const list = h('ul', { class: 'grid gap-3 lg:grid-cols-2' });
+      const list = h('ul', { class: 'grid gap-3 lg:grid-cols-2 2xl:grid-cols-3' });
       const empty = doneState('Todo categorizado. No hay movimientos pendientes.');
       const sync = () => { empty.classList.toggle('hidden', list.children.length > 0); refreshCounts(); };
       cur.items.forEach((it) => list.append(inboxCard(it, inbox.kind, bar.update)));
@@ -765,7 +766,7 @@
     const d = () => mov.d;
     const tilesBox = h('div', { class: 'mb-3 grid grid-cols-3 gap-2' });
     const info = h('p', { class: 'my-2 text-sm text-slate-400', 'aria-live': 'polite' });
-    const wrap = h('div', { class: 'card max-h-[62vh] overflow-auto rounded-xl border border-slate-800 bg-slate-900' });
+    const wrap = h('div', { class: 'card max-h-[62vh] overflow-auto rounded-xl border border-slate-800 bg-slate-900 xl:max-h-[max(62vh,calc(100vh-22rem))]' }); // en PC usa el alto disponible
     const more = h('button', { type: 'button', class: BTN_GHOST + ' mt-3 hidden', onclick: () => { mov.limit += 200; drawTable(); } }, 'Mostrar más');
     const controls = h('div', { class: 'mb-3 space-y-2' });
     const drawerBox = h('div', {});
@@ -796,7 +797,7 @@
         h('div', { class: 'flex flex-wrap items-center justify-between gap-2' },
           h('div', { role: 'tablist', class: 'flex gap-1 rounded-xl bg-slate-900 p-1' }, tab('debito'), tab('credito')),
           h('div', { class: 'flex gap-2' },
-            h('button', { type: 'button', class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewHistory(root, true) }, 'Actualizar'),
+            h('button', { type: 'button', class: BTN_GHOST + ' !px-3 !py-1.5 md:hidden', onclick: () => viewHistory(root, true) }, 'Actualizar'),
             h('button', { type: 'button', 'data-act': 'drawer', class: BTN + ' !px-3 !py-1.5', onclick: () => toggleDrawer(!mov.drawer) }, mov.drawer ? 'Cerrar panel' : '+ Cargar varios'))),
         h('div', { class: 'flex flex-col gap-2 sm:flex-row' }, selCta, selMes, q));
     }
@@ -1204,7 +1205,7 @@
       h('div', { class: 'mb-3 flex flex-wrap gap-1 rounded-xl bg-slate-900 p-1', role: 'tablist', 'aria-label': 'Filtrar por tipo' }, tabs.map(([k, label]) =>
         h('button', { type: 'button', role: 'tab', 'aria-selected': catUi.filtro === k ? 'true' : 'false', onclick: () => { catUi.filtro = k; paintCategories(root, d); },
           class: 'rounded-lg px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (catUi.filtro === k ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200') }, label))),
-      h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, shown.map((i) =>
+      h('ul', { class: 'grid gap-2 lg:grid-cols-2 2xl:grid-cols-3' }, shown.map((i) =>
         h('li', { class: 'card card-hover flex items-center gap-3 rounded-xl border bg-slate-900 p-3 ' + (i.emoji && i.tipo ? 'border-slate-800' : 'border-amber-500/50') },
           h('span', { class: 'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-2xl', 'aria-hidden': i.emoji ? 'true' : null }, i.emoji || '❔'),
           h('div', { class: 'min-w-0 flex-1' },
@@ -1386,7 +1387,7 @@
     root.replaceChildren(
       h('h2', { class: 'mb-1 text-base font-semibold md:hidden' }, 'Tarjetas'),
       h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Meta: al corte, solo la cuota del mes; el resto de consumos en 0.'),
-      h('div', { class: 'grid gap-3 lg:grid-cols-2 lg:items-start' }, d.cards.map((c) => cardPanel(c, () => viewCards(root, true)))));
+      h('div', { class: 'grid gap-3 lg:grid-cols-2 lg:items-start 2xl:grid-cols-3' }, d.cards.map((c) => cardPanel(c, () => viewCards(root, true)))));
   }
 
   /* ---------- vista: Resumen (Débito y Crédito son visiones independientes: nunca se suman) ---------- */
@@ -1423,31 +1424,33 @@
 
   function summaryDebito(d) {
     const x = d.debito;
-    return [
-      h('div', { class: 'grid grid-cols-2 gap-2 lg:grid-cols-3' },
+    return [ // [indicadores, detalle]: en PC ancho van lado a lado
+      h('div', { class: 'grid grid-cols-2 gap-2 lg:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3' },
         x.sobrante == null ? statTile('Sobró del mes pasado', null, null, 'sin data') : statTile('Sobró del mes pasado', x.sobrante, null, 'el cierre del mes anterior'),
         statTile('Ingresos', x.ingresos, x.prev.ingresos, 'incluye la categoría «Restante»'),
         statTile('Gastos', x.gastos, x.prev.gastos),
         statTile('Pagos de tarjeta', x.pagosTarjeta, x.prev.pagosTarjeta, 'salen de tu cuenta, no son gasto'),
         statTile('Debería quedar', x.flujo, null, 'sobró + ingresos − gastos − pagos'),
         statTile('Cierre registrado', x.cierre, null, 'pasa como «sobró» al mes siguiente')),
-      h('h3', { class: 'mb-2 mt-5 text-sm font-semibold' }, 'Gastos por categoría'),
-      rankBars(x.porCategoria, 'categoria', x.gastos),
+      h('div', {},
+        h('h3', { class: 'mb-2 text-sm font-semibold' }, 'Gastos por categoría'),
+        rankBars(x.porCategoria, 'categoria', x.gastos)),
     ];
   }
 
   function summaryCredito(d) {
     const x = d.credito;
-    return [
-      h('div', { class: 'grid grid-cols-2 gap-2 lg:grid-cols-4' },
+    return [ // [indicadores, detalle]
+      h('div', { class: 'grid grid-cols-2 gap-2 lg:grid-cols-4 xl:grid-cols-2 xl:content-start' },
         statTile('Consumos', x.consumos, x.prev.consumos, `directos ${fmtMoney(x.directos)} · en cuotas ${fmtMoney(x.enCuotas)}`),
         statTile('Pagos a tarjetas', x.pagos, x.prev.pagos),
         x.cuotasMes != null ? statTile('Cuotas del mes', x.cuotasMes, null, 'según el calendario de cuotas') : null,
         statTile('Préstamos', x.prestamos, x.prev.prestamos, 'por cobrar, no es consumo')),
-      h('h3', { class: 'mb-2 mt-5 text-sm font-semibold' }, 'Consumos por categoría'),
-      rankBars(x.porCategoria, 'categoria', x.consumos),
-      h('h3', { class: 'mb-2 mt-5 text-sm font-semibold' }, 'Por tarjeta'),
-      rankBars(x.porTarjeta.filter((t) => t.consumos > 0).map((t) => ({ tarjeta: t.tarjeta, monto: t.consumos })), 'tarjeta', x.consumos),
+      h('div', {},
+        h('h3', { class: 'mb-2 text-sm font-semibold' }, 'Consumos por categoría'),
+        rankBars(x.porCategoria, 'categoria', x.consumos),
+        h('h3', { class: 'mb-2 mt-5 text-sm font-semibold' }, 'Por tarjeta'),
+        rankBars(x.porTarjeta.filter((t) => t.consumos > 0).map((t) => ({ tarjeta: t.tarjeta, monto: t.consumos })), 'tarjeta', x.consumos)),
     ];
   }
 
@@ -1462,18 +1465,21 @@
     const tab = (key, txt) => h('button', {
       type: 'button', role: 'tab', 'aria-selected': sumUi.lado === key ? 'true' : 'false',
       onclick: () => { sumUi.lado = key; viewSummary(root); },
-      class: 'flex-1 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' +
+      class: 'flex-1 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 sm:flex-none sm:px-6 ' +
         (sumUi.lado === key ? 'bg-slate-700 text-slate-50' : 'text-slate-400 hover:text-slate-200'),
     }, txt);
     const c = d.cuadre;
     const cuadra = c.diferencia === 0;
+    const [tiles, detail] = sumUi.lado === 'debito' ? summaryDebito(d) : summaryCredito(d);
     root.replaceChildren(
-      h('div', { class: 'mb-3 flex items-center justify-between gap-2' },
-        navBtn('◀', 'Mes anterior', d.prevMes),
-        h('h2', { class: 'text-base font-semibold capitalize', 'data-testid': 'mes' }, mesLabel(d.mes)),
-        navBtn('▶', 'Mes siguiente', d.nextMes)),
-      h('div', { role: 'tablist', class: 'mb-4 flex gap-1 rounded-xl border border-slate-800 bg-slate-900 p-1' }, tab('debito', 'Débito'), tab('credito', 'Crédito')),
-      ...(sumUi.lado === 'debito' ? summaryDebito(d) : summaryCredito(d)).filter(Boolean),
+      // mes y Débito | Crédito en una sola fila compacta
+      h('div', { class: 'mb-4 flex flex-wrap items-center justify-between gap-3' },
+        h('div', { class: 'flex items-center gap-2' },
+          navBtn('◀', 'Mes anterior', d.prevMes),
+          h('h2', { class: 'min-w-[9.5rem] text-center text-base font-semibold capitalize', 'data-testid': 'mes' }, mesLabel(d.mes)),
+          navBtn('▶', 'Mes siguiente', d.nextMes)),
+        h('div', { role: 'tablist', class: 'flex w-full gap-1 rounded-xl border border-slate-800 bg-slate-900 p-1 sm:w-auto' }, tab('debito', 'Débito'), tab('credito', 'Crédito'))),
+      h('div', { class: 'grid gap-6 xl:grid-cols-2 xl:items-start' }, tiles, detail),
       h('p', {
         class: 'mt-6 rounded-lg border px-3 py-2 text-xs ' + (cuadra ? 'border-slate-800 text-slate-500' : 'border-amber-500/40 bg-amber-500/10 text-amber-100'),
       }, cuadra
@@ -1512,9 +1518,10 @@
     const rollover = () => { if (done.date !== today()) { done = { date: today(), items: [] }; save(); } };
 
     const fab = h('button', { type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', title: 'Cuadre diario',
-      class: 'glass fixed bottom-6 right-6 z-40 hidden items-center gap-2 rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-slate-100 shadow-2xl transition hover:-translate-y-0.5 hover:border-emerald-400/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 md:flex' });
+      // vive en el pie del menú lateral (PC), encima de «Sincronizar Yape»
+      class: 'daily-fab hidden w-full items-center gap-2 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2.5 text-sm font-medium text-slate-100 transition hover:border-emerald-400/40 hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 md:flex' });
     const panel = h('div', { role: 'dialog', 'aria-label': 'Cuadre diario', class: 'hidden' });
-    const PANEL = 'glass glass-strong pop-in fixed bottom-20 right-6 z-40 w-80 rounded-2xl border border-white/10 p-4 shadow-2xl ';
+    const PANEL = 'daily-panel glass glass-strong pop-in fixed z-40 w-80 rounded-2xl border border-white/10 p-4 shadow-2xl ';
 
     const list = () => accounts || FALLBACK;
     const pending = () => list().filter((a) => !done.items.includes(a)).length;
@@ -1522,8 +1529,10 @@
     function draw() {
       rollover();
       const n = pending(), all = n === 0 && list().length > 0;
-      fab.replaceChildren(h('span', { class: all ? 'text-emerald-400' : 'text-amber-300', 'aria-hidden': 'true' }, all ? '✓' : '☐'), 'Cuadre diario',
-        h('span', { class: 'rounded-full px-2 py-0.5 text-xs ' + (all ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300') }, all ? 'al día' : `${n} pend.`));
+      fab.replaceChildren(h('span', { class: all ? 'text-emerald-400' : 'text-amber-300', 'aria-hidden': 'true' }, all ? '✓' : '☐'), h('span', { class: 'nav-label flex-1 text-left' }, 'Cuadre diario'),
+        h('span', { class: 'rounded-full px-2 py-0.5 text-xs ' + (all ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300') },
+          all ? h('span', { class: 'nav-label' }, 'al día') : [String(n), h('span', { class: 'nav-label' }, ' pend.')]));
+      fab.title = all ? 'Cuadre diario: al día' : `Cuadre diario: ${n} pendiente(s)`;
       fab.setAttribute('aria-expanded', open ? 'true' : 'false');
       panel.className = open ? PANEL + 'hidden md:block' : 'hidden';
       if (!open) return;
@@ -1540,7 +1549,7 @@
         e.preventDefault(); const v = add.value.trim();
         if (v && !list().includes(v)) { accounts = [...list(), v]; save(); draw(); }
       } }, add, h('button', { class: BTN + ' !px-3 !py-1.5', type: 'submit' }, 'Añadir'));
-      panel.replaceChildren(
+      panel.replaceChildren(...[ // filter(Boolean): replaceChildren nativo pintaría «false»
         h('div', { class: 'mb-2 flex items-baseline justify-between' },
           h('h2', { class: 'text-sm font-semibold' }, 'Cuadre de hoy'),
           h('span', { class: 'text-xs text-slate-500' }, `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} · se reinicia cada día`)),
@@ -1549,7 +1558,7 @@
         addForm,
         h('div', { class: 'mt-3 flex justify-between text-xs' },
           h('button', { type: 'button', class: 'text-slate-400 underline decoration-dotted hover:text-slate-200', onclick: () => { editing = !editing; draw(); } }, editing ? 'Listo' : 'Editar cuentas'),
-          h('button', { type: 'button', class: 'text-slate-400 underline decoration-dotted hover:text-slate-200', onclick: () => { done = { date: today(), items: [] }; save(); draw(); } }, 'Reiniciar hoy')));
+          h('button', { type: 'button', class: 'text-slate-400 underline decoration-dotted hover:text-slate-200', onclick: () => { done = { date: today(), items: [] }; save(); draw(); } }, 'Reiniciar hoy'))].filter(Boolean));
     }
 
     async function seedAccounts() { // primera vez: toma tus cuentas y tarjetas del Excel
@@ -1566,7 +1575,7 @@
     document.addEventListener('visibilitychange', () => { if (!document.hidden) draw(); });
     setInterval(draw, 60000); // si la app queda abierta pasada la medianoche, se reinicia sola
     return {
-      mount() { document.body.append(fab, panel); draw(); },
+      mount() { const slot = $('#daily-slot'); if (slot) slot.append(fab); else document.body.append(fab); document.body.append(panel); draw(); },
       sync() { fab.classList.toggle('md:flex', hasCreds()); if (!hasCreds()) { open = false; panel.className = 'hidden'; } else seedAccounts(); },
     };
   })();
@@ -1687,6 +1696,16 @@
     daily.mount();
     initSetup();
     document.querySelectorAll('[data-act=yape]').forEach((b) => b.addEventListener('click', syncYape));
+    // «Actualizar» del encabezado (PC): misma posición en todas las secciones; vuelve a pedir los datos de la vista actual
+    const refreshBtn = $('[data-act=refresh]');
+    if (refreshBtn) refreshBtn.addEventListener('click', async () => {
+      const ic = refreshBtn.querySelector('span'); if (ic) ic.classList.add('spin');
+      refreshBtn.disabled = true;
+      const root = $('#view'), v = currentView();
+      try { await (v === 'movimientos' || v === 'nuevo' ? viewHistory(root, true) : VIEWS[v](root)); } finally {
+        refreshBtn.disabled = false; if (ic) ic.classList.remove('spin');
+      }
+    });
     window.addEventListener('hashchange', route);
     boot();
     if ('serviceWorker' in navigator && location.protocol === 'https:') {
