@@ -613,7 +613,7 @@
       if (r.tipo === 'Pago') return r.tarjeta ? '' : 'Elige la tarjeta';
       return r.detalle.trim() ? '' : 'Falta el detalle';
     }
-    if (r.tipo === 'Abono') return '';
+    if (r.tipo !== 'Directo' && r.tipo !== 'Cuotas') return 'El abono manual está desactivado: cambia el tipo o quita la fila';
     if (!r.detalle.trim()) return 'Falta el detalle';
     if (r.tipo === 'Cuotas') { const c = Number(r.cuotas); if (!(Number.isInteger(c) && c >= 2 && c <= 48)) return 'Cuotas: de 2 a 48'; }
     return '';
@@ -674,6 +674,7 @@
     CONFLICT: 'Ese dato cambió en la hoja. Recarga para ver el actual.', PAGO_LINKED: 'Es un pago de tarjeta (partida doble): solo se puede comentar.',
     UNKNOWN_CATEGORY: 'Esa categoría no existe: créala en Categorías.', TIPO_MISMATCH: 'La categoría no corresponde a un ingreso/egreso de ese monto.',
     BAD_CUENTA: 'Cuenta no reconocida.', BAD_CATEGORIA: 'Categoría no permitida.', BAD_AMOUNT: 'Monto inválido.', BAD_ESTADO: 'Estado inválido.',
+    DUP_LOCKED: 'Marcado como duplicado desde el Inbox: solo se puede comentar.', ABONO_OFF: 'El abono manual está desactivado: registra el pago desde Débito.',
   });
 
   // con el panel abierto, el contenido usa todo el ancho que queda a su izquierda (sin centrarse ni dejar huecos)
@@ -769,8 +770,8 @@
     }
     function recompute() { const D = d(); if (!D.truncated) D.totales = Object.assign({}, D.totales, scopeTotals(D, D.rows), { saldo: scopeTotals(D, D.rows).neto }); }
 
-    function editable(td, { display, edit, locked }) {
-      if (locked) { td.classList.add('text-slate-500'); td.title = 'Bloqueado: pago de tarjeta (partida doble)'; return td; }
+    function editable(td, { display, edit, locked, lockTitle }) {
+      if (locked) { td.classList.add('text-slate-500'); td.title = lockTitle || 'Bloqueado: pago de tarjeta (partida doble)'; return td; }
       td.tabIndex = 0; td.classList.add('cursor-text', 'hover:bg-slate-800', 'focus:outline-none', 'focus-visible:ring-1', 'focus-visible:ring-emerald-400');
       const go = () => edit(td);
       td.addEventListener('click', (e) => { if (!td.querySelector('input,select')) go(e); });
@@ -788,36 +789,42 @@
     function cell(r, c) {
       const D = d(), [key, , header, kind] = c, i = colIdx(D, header);
       const v = i >= 0 ? r[i] : null, iI = colIdx(D, 'ID'), hasId = !!(iI >= 0 && r[iI]);
-      const catIdx = colIdx(D, 'Categoría'), isPago = catIdx >= 0 && normKey(r[catIdx]) === 'pago tarjeta';
+      const catIdx = colIdx(D, 'Categoría'), iTipo = colIdx(D, 'Tipo'), iDet = colIdx(D, 'Detalle/Comercio');
+      // pago de tarjeta: en Débito por su categoría; en Crédito, Ingreso cuyo detalle empieza con «Pago» (la otra mitad de la partida doble)
+      const isPago = (catIdx >= 0 && normKey(r[catIdx]) === 'pago tarjeta') ||
+        (mov.hoja === 'credito' && iTipo >= 0 && normKey(r[iTipo]) === 'ingreso' && iDet >= 0 && normKey(r[iDet]).startsWith('pago'));
+      const dupRow = isDup(D, r); // marcado como duplicado desde el Inbox: queda fijo
+      const lockAll = isPago || dupRow;
+      const lockTitle = dupRow ? 'Bloqueado: marcado como duplicado desde el Inbox' : 'Bloqueado: pago de tarjeta (partida doble)';
       const td = h('td', { class: 'whitespace-nowrap px-3 py-2 ' });
       const blank = v === null || v === '';
-      const dim = isDup(D, r) ? ' line-through opacity-60' : '';
+      const dim = dupRow ? ' line-through opacity-60' : '';
       const lockedBase = !hasId;
       if (kind === 'ro') { td.className += 'text-slate-400' + dim; td.textContent = blank ? '·' : String(v); return td; }
       if (kind === 'bool') {
         td.className += 'text-center';
-        const cb = h('input', { type: 'checkbox', class: 'h-4 w-4 accent-emerald-500', 'aria-label': 'Pagado', disabled: lockedBase || normKey(r[colIdx(D, 'Tipo')]) !== 'egreso' });
+        const cb = h('input', { type: 'checkbox', class: 'h-4 w-4 accent-emerald-500', 'aria-label': 'Pagado', disabled: lockedBase || dupRow || normKey(r[colIdx(D, 'Tipo')]) !== 'egreso' });
         cb.checked = v === true;
         cb.addEventListener('change', () => saveCell(r, key, cb.checked, cb.checked, v === true));
         td.append(cb); return td;
       }
       if (kind === 'estado') {
         const pend = normKey(v) === 'pendiente';
-        const b = h('button', { type: 'button', disabled: lockedBase || blank, title: pend ? 'Marcar como procesado' : 'Volver a pendiente',
+        const b = h('button', { type: 'button', disabled: lockedBase || blank || dupRow, title: pend ? 'Marcar como procesado' : 'Volver a pendiente',
           class: 'rounded-full px-2 py-0.5 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ' + (pend ? 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30' : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25') }, blank ? '·' : String(v));
         b.addEventListener('click', () => { const nuevo = pend ? 'Procesado' : 'Pendiente'; saveCell(r, key, nuevo, nuevo, v == null ? '' : String(v)); });
         td.append(b); return td;
       }
       if (kind === 'dt') {
         td.className += 'tabular-nums text-slate-300' + dim; td.textContent = fmtFull(v);
-        return editable(td, { locked: lockedBase || isPago, edit: () => inlineInput(td, { type: 'datetime-local', value: (v || '').slice(0, 16),
+        return editable(td, { locked: lockedBase || lockAll, lockTitle, edit: () => inlineInput(td, { type: 'datetime-local', value: (v || '').slice(0, 16),
           onCommit: (nv) => { if (!nv) return drawTable(); saveCell(r, key, nv + ':00', nv, v); } }) });
       }
       if (kind === 'money') {
         const neg = typeof v === 'number' && v < 0;
         td.className += 'text-right tabular-nums ' + (neg ? 'text-rose-300' : 'text-emerald-300') + dim; td.textContent = typeof v === 'number' ? fmtMoney(v) : '·';
         td.title = 'Escribe el monto; con + o − al inicio cambias el signo';
-        return editable(td, { locked: lockedBase || isPago, edit: () => inlineInput(td, { type: 'text', value: String(v ?? ''), attrs: { inputmode: 'decimal', class: 'w-24 rounded border border-emerald-500 bg-slate-950 px-2 py-1 text-right text-sm text-slate-100 focus:outline-none' },
+        return editable(td, { locked: lockedBase || lockAll, lockTitle, edit: () => inlineInput(td, { type: 'text', value: String(v ?? ''), attrs: { inputmode: 'decimal', class: 'w-24 rounded border border-emerald-500 bg-slate-950 px-2 py-1 text-right text-sm text-slate-100 focus:outline-none' },
           onCommit: (nv) => {
             const s = nv.replace(/[^\d.,+\-]/g, '').replace(',', '.'); const n = Math.abs(Number(s.replace(/^[+-]/, '')));
             if (!Number.isFinite(n) || n === 0 || n > 1000000) { toast('Monto inválido.', 'err'); return drawTable(); }
@@ -830,14 +837,13 @@
       if (kind === 'cat') {
         td.className += 'text-slate-200' + dim; td.textContent = blank ? '·' : catLabel(v);
         if (blank) td.className = td.className.replace('text-slate-200', 'text-slate-600');
-        return editable(td, { locked: lockedBase || isPago, edit: () => {
+        return editable(td, { locked: lockedBase || lockAll, lockTitle, edit: () => {
           const m = r[colIdx(D, 'Monto')];
           const tipo = typeof m === 'number' && m > 0 ? 'Ingreso' : 'Egreso';
           const list = catsFor(tipo);
           const sel = h('select', { class: 'rounded border border-emerald-500 bg-slate-950 px-2 py-1 text-sm text-slate-100 focus:outline-none' },
             h('option', { value: '' }, '— Sin categoría'),
-            ...[...new Set([...(v && !list.includes(v) && normKey(v) !== 'duplicado' ? [v] : []), ...list])].map((x) => h('option', { value: x, selected: x === v }, catLabel(x))),
-            mov.hoja === 'debito' ? h('option', { value: 'Duplicado', selected: normKey(v) === 'duplicado' }, '♻️ Duplicado') : null);
+            ...[...new Set([...(v && !list.includes(v) && normKey(v) !== 'duplicado' ? [v] : []), ...list])].map((x) => h('option', { value: x, selected: x === v }, catLabel(x))));
           if (!v) sel.value = '';
           let done = false;
           sel.addEventListener('change', () => { done = true; const nv = sel.value; if (nv === (v || '')) drawTable(); else saveCell(r, key, nv || null, nv, v == null ? '' : String(v)); });
@@ -850,8 +856,8 @@
       if (key === 'detalle' && td.className) td.className += ' max-w-[18rem] truncate';
       td.textContent = blank ? (key === 'comentario' ? '＋ comentario' : '·') : String(v);
       if (blank) td.className += ' text-slate-600';
-      const canEdit = !lockedBase && !(isPago && key !== 'comentario');
-      return editable(td, { locked: !canEdit, edit: () => inlineInput(td, { type: 'text', value: v == null ? '' : String(v), attrs: { maxlength: key === 'detalle' ? '120' : '200', placeholder: key === 'comentario' ? 'Comentario' : '' },
+      const canEdit = !lockedBase && !(lockAll && key !== 'comentario');
+      return editable(td, { locked: !canEdit, lockTitle, edit: () => inlineInput(td, { type: 'text', value: v == null ? '' : String(v), attrs: { maxlength: key === 'detalle' ? '120' : '200', placeholder: key === 'comentario' ? 'Comentario' : '' },
         onCommit: (nv) => {
           const t = nv.trim();
           if (key === 'detalle' && !t) { toast('El detalle no puede quedar vacío.', 'err'); return drawTable(); }
@@ -878,7 +884,7 @@
       const list = draftList(), last = list[list.length - 1], f = last ? last.fecha : nowLocalInput();
       const base = { id: manualId(f), fecha: f, monto: '', detalle: '', categoria: '', comentario: '', err: '' };
       return mov.hoja === 'debito' ? Object.assign(base, { tipo: last ? last.tipo : 'Egreso', tarjeta: last ? last.tarjeta : '' })
-        : Object.assign(base, { tipo: last ? last.tipo : 'Directo', cuotas: '', pagado: false });
+        : Object.assign(base, { tipo: last && (last.tipo === 'Directo' || last.tipo === 'Cuotas') ? last.tipo : 'Directo', cuotas: '', pagado: false });
     }
     function toggleDrawer(on) {
       mov.drawer = on;
@@ -886,7 +892,8 @@
       drawerLayout(on);
       drawControls(); drawDrawer();
     }
-    const TIPOS = { debito: [['Egreso', 'Egreso'], ['Ingreso', 'Ingreso'], ['Pago', 'Pago de tarjeta']], credito: [['Directo', 'Consumo directo'], ['Cuotas', 'Consumo en cuotas'], ['Abono', 'Abono / ingreso']] };
+    // El abono manual en Crédito está desactivado: los pagos llegan por el ETL o como «Pago de tarjeta» desde Débito (partida doble).
+    const TIPOS = { debito: [['Egreso', 'Egreso'], ['Ingreso', 'Ingreso'], ['Pago', 'Pago de tarjeta']], credito: [['Directo', 'Consumo directo'], ['Cuotas', 'Consumo en cuotas']] };
     const SMALL = 'rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-emerald-400 focus:outline-none';
     function drawDrawer() {
       if (!mov.drawer) { drawerBox.replaceChildren(); return; }
@@ -928,7 +935,9 @@
           if (type === 'text') i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (n === list.length - 1) addRow(true); } });
           return i;
         };
-        const tipo = h('select', { class: SMALL, 'aria-label': 'Tipo' }, TIPOS[mov.hoja].map(([v, l]) => h('option', { value: v, selected: v === r.tipo }, l)));
+        const legacy = !TIPOS[mov.hoja].some(([v]) => v === r.tipo); // borrador viejo (p. ej. «Abono»): se muestra tal cual y no se registra
+        const tipo = h('select', { class: SMALL, 'aria-label': 'Tipo' }, legacy ? h('option', { value: r.tipo, selected: true, disabled: true }, `${r.tipo} (ya no disponible)`) : null,
+          TIPOS[mov.hoja].map(([v, l]) => h('option', { value: v, selected: v === r.tipo }, l)));
         tipo.addEventListener('change', () => { r.tipo = tipo.value; if (r.tipo === 'Pago' || r.tipo === 'Abono') r.categoria = ''; r.err = ''; saveMov(); wrapEl.replaceWith(draftEl(r, n)); drawTiles(); preview(); });
         const catTipo = draftSign(r) > 0 ? 'Ingreso' : 'Egreso';
         const cat = h('select', { class: SMALL + ' min-w-0 flex-1', 'aria-label': 'Categoría' }, h('option', { value: '' }, 'Sin categoría'),
