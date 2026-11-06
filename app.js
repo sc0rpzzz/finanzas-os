@@ -19,7 +19,7 @@
   const cacheGet = (key) => { try { const j = JSON.parse(localStorage.getItem(CACHE_PREFIX + key)); return j && j.v !== undefined ? j.v : null; } catch { return null; } };
   const cacheSet = (key, v) => { try { const s = JSON.stringify({ t: Date.now(), v }); if (s.length < 1500000) localStorage.setItem(CACHE_PREFIX + key, s); } catch { /* sin espacio: no pasa nada */ } };
   const cacheClear = () => { try { Object.keys(localStorage).filter((k) => k.startsWith(CACHE_PREFIX)).forEach((k) => localStorage.removeItem(k)); } catch { /* nada */ } };
-  const WRITE_ACTIONS = new Set(['categorize', 'setPagado', 'toggleCuota', 'setEstado', 'addManual', 'addCreditConsumo', 'addPagoTarjeta', 'syncYape']);
+  const WRITE_ACTIONS = new Set(['categorize', 'setPagado', 'toggleCuota', 'setEstado', 'addManual', 'addCreditConsumo', 'addPagoTarjeta', 'syncYape', 'saveCategory']);
   let inflight = 0;
   const busy = (d) => { inflight = Math.max(0, inflight + d); const el = document.getElementById('busy'); if (el) el.classList.toggle('hidden', inflight === 0); };
 
@@ -47,6 +47,7 @@
     calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
     refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/>',
     table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16"/>',
+    tag: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r=".5"/>',
     chart: '<path d="M3 3v18h18"/><path d="M7 15v3M12 9v9M17 5v13"/>',
     logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
   };
@@ -128,6 +129,7 @@
       if (code === 'UNAUTHORIZED' && !creds) { ls.del(KEYS.token); openSetup('El token ya no es válido. Ingresa el nuevo.'); }
       throw new ApiError(code, json && json.message);
     }
+    harvestEmojis(json.data);
     if (WRITE_ACTIONS.has(action)) cacheClear(); // lo guardado ya no es fiel: mejor cargar de nuevo que mostrar algo viejo
     return json.data;
   }
@@ -198,6 +200,31 @@
     state.cats = [...set].sort((a, b) => a.localeCompare(b, 'es'));
   };
   const validCat = (c) => c.length > 0 && c.length <= 40 && !/^[=+\-@]/.test(c);
+
+  /* ---------- emojis de categorías (el servidor manda { nombre-normalizado: emoji }) ---------- */
+  const EMOJI_RE = /^(?:\p{Extended_Pictographic}(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}])?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}])?)*|\p{Regional_Indicator}{2})$/u;
+  const validEmoji = (e) => { e = String(e || '').trim(); return e.length > 0 && e.length <= 16 && EMOJI_RE.test(e); };
+  const normKey = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const emojiStore = (() => { try { return JSON.parse(localStorage.getItem('fos.emojis')) || {}; } catch { return {}; } })();
+  state.emojis = emojiStore;
+  function mergeEmojis(m) {
+    if (!m || typeof m !== 'object') return;
+    state.emojis = Object.assign({}, m); // el servidor manda el mapa completo: reemplaza (así un renombrado no deja basura)
+    try { localStorage.setItem('fos.emojis', JSON.stringify(state.emojis)); } catch { /* sin storage */ }
+  }
+  const harvestEmojis = (data) => {
+    if (!data) return;
+    if (data.emojis) mergeEmojis(data.emojis);
+    if (Array.isArray(data.results)) data.results.forEach((r) => { if (r && r.ok && r.data && r.data.emojis) mergeEmojis(r.data.emojis); });
+  };
+  const emojiOf = (c) => state.emojis[normKey(c)] || '';
+  const catLabel = (c) => (emojiOf(c) ? `${emojiOf(c)} ${c}` : c);
+  const EMOJI_PALETTE = ['🍽️', '🛒', '☕', '🍔', '🍕', '🥤', '🚌', '🚕', '⛽', '🏠', '💡', '📶', '📱', '💊', '🩺', '🏋️', '🎮', '🎬', '🎁', '👕', '🛍️', '💇', '👨‍👩‍👧', '🐶', '📚', '✈️', '🧾', '💸', '🔧', '🧴'];
+  function emojiPicker(input, onPick) {
+    return h('div', { class: 'mt-2 flex flex-wrap gap-1', role: 'group', 'aria-label': 'Emojis sugeridos' }, EMOJI_PALETTE.map((e) =>
+      h('button', { type: 'button', class: 'h-9 w-9 rounded-lg border border-slate-700 bg-slate-950 text-lg hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300', 'aria-label': `Usar ${e}`,
+        onclick: () => { input.value = e; if (onPick) onPick(); input.dispatchEvent(new Event('input')); } }, e)));
+  }
 
   /* ---------- vista: Inbox ---------- */
   function loading(text = 'Cargando…') { return h('p', { class: 'animate-pulse py-10 text-center text-sm text-slate-400' }, text); }
@@ -395,15 +422,22 @@
   function inboxCard(it, kind, onDone) {
     const sel = h('select', { class: INPUT, 'aria-label': 'Categoría' },
       h('option', { value: '', disabled: true, selected: true }, 'Elegir categoría…'),
-      state.cats.map((c) => h('option', { value: c }, c)),
+      state.cats.map((c) => h('option', { value: c }, catLabel(c))),
       h('option', { value: NEW_CAT }, '+ Nueva categoría…'));
     const newInp = h('input', { class: INPUT + ' hidden mt-2', placeholder: 'Nombre de la categoría', maxlength: '40', 'aria-label': 'Nueva categoría' });
+    const emoInp = h('input', { class: INPUT + ' mt-2 w-24 text-center text-xl', placeholder: '😀', maxlength: '16', 'aria-label': 'Emoji de la nueva categoría (obligatorio)', inputmode: 'text' });
+    const emoBox = h('div', { class: 'hidden' }, h('p', { class: 'mt-2 text-xs text-slate-400' }, 'Toda categoría nueva necesita un emoji:'), emoInp, emojiPicker(emoInp));
+    const isNewName = () => sel.value === NEW_CAT && !state.cats.some((c) => normKey(c) === normKey(newInp.value));
     const btn = h('button', { class: BTN + ' w-full sm:w-auto', disabled: true, type: 'button' }, 'Guardar');
     const payBtn = h('button', { class: 'mt-2 text-xs text-slate-400 underline decoration-dotted underline-offset-2 hover:text-slate-200', type: 'button' }, 'Es un pago de tarjeta (no es gasto)');
     const chosen = () => (sel.value === NEW_CAT ? newInp.value.trim() : sel.value);
-    const sync = () => { btn.disabled = !validCat(chosen()); };
+    const sync = () => {
+      emoBox.classList.toggle('hidden', !isNewName());
+      btn.disabled = !validCat(chosen()) || (isNewName() && !validEmoji(emoInp.value));
+    };
     sel.addEventListener('change', () => { newInp.classList.toggle('hidden', sel.value !== NEW_CAT); if (sel.value === NEW_CAT) newInp.focus(); sync(); });
     newInp.addEventListener('input', sync);
+    emoInp.addEventListener('input', sync);
 
     const li = h('li', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-4' },
       h('div', { class: 'flex items-start justify-between gap-3' },
@@ -413,7 +447,7 @@
           h('p', { class: 'mt-0.5 text-xs text-slate-500' }, `${fmtDate(it.fecha)} · ${it.banco}`, it.cuotas ? ` · ${it.cuotas} cuotas` : '')),
         h('p', { class: 'shrink-0 font-semibold tabular-nums ' + ((it.monto || 0) < 0 ? 'text-rose-300' : 'text-emerald-300') }, fmtMoney(it.monto))),
       h('div', { class: 'mt-3 flex flex-col gap-2 sm:flex-row sm:items-start' },
-        h('div', { class: 'flex-1' }, sel, newInp), btn),
+        h('div', { class: 'flex-1' }, sel, newInp, emoBox), btn),
       kind === 'debito' && payBtn);
 
     payBtn.addEventListener('click', async () => {
@@ -428,9 +462,11 @@
     btn.addEventListener('click', async () => {
       const categoria = chosen();
       if (!validCat(categoria)) return;
+      const emoji = isNewName() ? emoInp.value.trim() : undefined;
+      if (isNewName() && !validEmoji(emoji)) return;
       btn.disabled = true; btn.textContent = 'Guardando…';
       try {
-        const r = await api('categorize', { id: it.id, categoria, onlyIfBlank: true, hoja: kind });
+        const r = await api('categorize', { id: it.id, categoria, emoji, onlyIfBlank: true, hoja: kind });
         mergeCats([r.categoria || categoria]);
         toast(r.updated ? `Guardado en «${categoria}»` : 'Ya tenía categoría (otro dispositivo)');
         onDone(li);
@@ -456,7 +492,7 @@
   const manual = { mode: 'efectivo' };
   const MODES = [['efectivo', 'Efectivo'], ['consumo', 'Consumo tarjeta'], ['pago', 'Pago tarjeta']];
   const field = (label, el) => h('label', { class: 'block text-sm text-slate-300' }, label, h('div', { class: 'mt-1' }, el));
-  const catSelect = () => h('select', { class: INPUT }, h('option', { value: '' }, 'Sin categoría (irá al Inbox)'), state.cats.map((c) => h('option', { value: c }, c)));
+  const catSelect = () => h('select', { class: INPUT }, h('option', { value: '' }, 'Sin categoría (irá al Inbox)'), state.cats.map((c) => h('option', { value: c }, catLabel(c))));
   const optSelect = (list) => h('select', { class: INPUT, required: true }, list.map((x) => h('option', { value: x }, x)));
 
   /**
@@ -624,7 +660,7 @@
       if (typeof v === 'number') return td('text-right tabular-nums ' + (i === iM ? (v < 0 ? 'text-rose-300' : 'text-emerald-300') : 'text-slate-300'), i === iM || name.includes('monto') ? fmtMoney(v) : String(v));
       if (typeof v === 'boolean') return td('text-center ' + (v ? 'text-emerald-300' : 'text-slate-600'), v ? '✓' : '·');
       if (name === 'id') return td('text-xs text-slate-500', v);
-      return td('text-slate-200', v);
+      return td('text-slate-200', name === 'categoria' ? catLabel(v) : v);
     };
 
     function draw() {
@@ -655,6 +691,79 @@
       h('div', { class: 'flex flex-col gap-2 sm:flex-row' }, q, selMes, selCta),
       info, wrap, more);
     draw();
+  }
+
+  /* ---------- vista: Categorías (editar nombre y emoji; el emoji es obligatorio) ---------- */
+  function openCatEditor(item, d, root) {
+    const isNew = !item;
+    const dlg = h('dialog', { class: 'w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-0 text-slate-100', 'aria-label': isNew ? 'Nueva categoría' : `Editar ${item.nombre}` });
+    const name = h('input', { class: INPUT, value: isNew ? '' : item.nombre, maxlength: '40', required: true, 'aria-label': 'Nombre de la categoría' });
+    const emo = h('input', { class: INPUT + ' w-24 text-center text-2xl', value: isNew ? '' : (item.emoji || ''), placeholder: '😀', maxlength: '16', required: true, 'aria-label': 'Emoji (obligatorio)' });
+    const note = h('p', { class: 'min-h-[1.25rem] text-xs text-slate-400', 'aria-live': 'polite' });
+    const err = h('p', { class: 'hidden rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200' });
+    const save = h('button', { type: 'submit', class: BTN, disabled: true }, 'Guardar');
+    const others = d.items.filter((i) => !item || normKey(i.nombre) !== normKey(item.nombre));
+    const sync = () => {
+      const nm = name.value.trim(), em = emo.value.trim();
+      const clash = others.find((i) => normKey(i.nombre) === normKey(nm));
+      const nameOk = validCat(nm) && !(item === null && clash) && !(clash && clash.sistema) && !d.items.some((i) => i.sistema && normKey(i.nombre) === normKey(nm));
+      let msg = '';
+      if (!em) msg = 'Falta el emoji: es obligatorio.';
+      else if (!validEmoji(em)) msg = 'Pon un solo emoji (sin letras ni números).';
+      else if (isNew && clash) msg = 'Ya existe una categoría con ese nombre.';
+      else if (clash) msg = `Se fusionará con «${clash.nombre}»: sus movimientos pasarán a esa categoría.`;
+      else if (item && nm && nm !== item.nombre) msg = `Se renombrará en ${item.debito + item.credito} movimiento(s) (Débito ${item.debito} · Crédito ${item.credito}).`;
+      note.textContent = msg;
+      note.className = 'min-h-[1.25rem] text-xs ' + (clash && !isNew ? 'text-amber-300' : !em || !validEmoji(em) ? 'text-rose-300' : 'text-slate-400');
+      save.disabled = !(nameOk && validEmoji(em));
+    };
+    name.addEventListener('input', sync); emo.addEventListener('input', sync);
+    const form = h('form', { class: 'space-y-3 p-6', autocomplete: 'off' },
+      h('h2', { class: 'text-lg font-semibold' }, isNew ? 'Nueva categoría' : 'Editar categoría'),
+      h('label', { class: 'block text-sm' }, 'Nombre', name),
+      h('div', { class: 'text-sm' }, h('span', {}, 'Emoji '), h('span', { class: 'text-rose-300' }, '(obligatorio)'), h('div', {}, emo), emojiPicker(emo)),
+      note, err,
+      h('div', { class: 'flex justify-end gap-2 pt-1' }, h('button', { type: 'button', class: BTN_GHOST, onclick: () => dlg.close() }, 'Cancelar'), save));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (save.disabled) return;
+      save.disabled = true; save.textContent = 'Guardando…'; err.classList.add('hidden');
+      try {
+        const r = await api('saveCategory', { nombre: item ? item.nombre : undefined, nuevo: name.value.trim(), emoji: emo.value.trim() });
+        toast(r.fusionada ? `Fusionada en «${r.nombre}»` : `Guardado ${r.emoji} ${r.nombre}`);
+        dlg.close();
+        viewCategories(root);
+      } catch (ex) {
+        err.textContent = ex.code === 'EXISTS' ? 'Ya existe una categoría con ese nombre.' : errText(ex); err.classList.remove('hidden');
+        save.textContent = 'Guardar'; sync();
+      }
+    });
+    dlg.append(form);
+    dlg.addEventListener('close', () => dlg.remove());
+    document.body.append(dlg);
+    dlg.showModal(); sync(); (isNew ? name : emo).focus();
+  }
+
+  function paintCategories(root, d) {
+    const missing = d.items.filter((i) => !i.emoji);
+    root.replaceChildren(...[
+      h('div', { class: 'mb-3 flex items-center justify-between gap-2' },
+        h('h2', { class: 'text-base font-semibold' }, 'Categorías'),
+        h('button', { type: 'button', class: BTN + ' !px-3 !py-1.5', onclick: () => openCatEditor(null, d, root) }, '+ Nueva')),
+      missing.length > 0 && h('p', { class: 'mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100', role: 'status' },
+        `${missing.length} categoría(s) sin emoji. Asígnales uno: es obligatorio.`),
+      h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Renombrar una categoría la cambia en todos sus movimientos, en Débito y en Crédito por separado.'),
+      h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, d.items.map((i) =>
+        h('li', { class: 'flex items-center gap-3 rounded-xl border bg-slate-900 p-3 ' + (i.emoji ? 'border-slate-800' : 'border-amber-500/50') },
+          h('span', { class: 'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-2xl', 'aria-hidden': i.emoji ? 'true' : null }, i.emoji || '❔'),
+          h('div', { class: 'min-w-0 flex-1' },
+            h('p', { class: 'truncate font-medium' }, i.nombre),
+            h('p', { class: 'truncate text-xs text-slate-500' }, i.sistema ? 'Reservada del sistema' : `Débito ${i.debito} · Crédito ${i.credito}`, !i.emoji && h('span', { class: 'ml-2 text-amber-300' }, 'falta emoji'))),
+          i.sistema ? h('span', { class: 'text-xs text-slate-600', title: 'No editable' }, '🔒')
+            : h('button', { type: 'button', class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => openCatEditor(i, d, root), 'aria-label': `Editar ${i.nombre}` }, 'Editar'))))].filter(Boolean));
+  }
+  async function viewCategories(root) {
+    await swr(root, 'cats', () => api('getCategoryAdmin'), (d) => paintCategories(root, d), { loadingText: 'Cargando categorías…', retry: () => viewCategories(root) });
   }
 
   /* ---------- vista: Calendario de cuotas ---------- */
@@ -850,7 +959,7 @@
       const gray = r[labelKey] === 'Sin categoría';
       return h('li', {},
         h('div', { class: 'flex items-baseline justify-between gap-3 text-sm' },
-          h('span', { class: 'truncate text-slate-200' }, r[labelKey]),
+          h('span', { class: 'truncate text-slate-200' }, labelKey === 'categoria' ? catLabel(r[labelKey]) : r[labelKey]),
           h('span', { class: 'shrink-0 tabular-nums text-slate-300' }, `${fmtMoney(r.monto)} · ${total ? Math.round((r.monto / total) * 100) : 0}%`)),
         h('div', { class: 'mt-1 h-2 rounded-r bg-slate-800', role: 'presentation' },
           h('div', { class: 'h-2 rounded-r', style: `width:${Math.max(2, (r.monto / max) * 100)}%;background:${gray ? '#64748b' : '#3987e5'}` })));
@@ -1009,7 +1118,7 @@
   })();
 
   /* ---------- router ---------- */
-  const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: viewManual, calendario: viewCalendar, resumen: viewSummary, movimientos: viewHistory };
+  const VIEWS = { inbox: viewInbox, tarjetas: viewCards, nuevo: viewManual, calendario: viewCalendar, resumen: viewSummary, movimientos: viewHistory, categorias: viewCategories };
   const currentView = () => { const v = location.hash.slice(1); return VIEWS[v] ? v : 'inbox'; };
   function route() {
     navTok++;

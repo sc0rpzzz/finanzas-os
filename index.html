@@ -23,7 +23,7 @@
     .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spin { animation: none; } * { transition: none !important; } }
   </style>
-  <script src="config.js?v=10"></script>
+  <script src="config.js?v=11"></script>
 </head>
 <body class="min-h-screen font-sans antialiased">
   <div id="busy" class="hidden fixed inset-x-0 top-0 z-50 h-0.5 animate-pulse bg-emerald-400" role="progressbar" aria-label="Actualizando"></div>
@@ -47,12 +47,13 @@
 
   <nav class="fixed inset-x-0 bottom-0 z-30 border-t border-slate-800 bg-slate-950/95 backdrop-blur safe-b md:inset-y-0 md:right-auto md:w-56 md:border-r md:border-t-0 md:pb-0" aria-label="Secciones">
     <div class="hidden px-6 py-4 text-lg font-semibold tracking-tight md:block">Finanzas <span class="text-emerald-400">OS</span></div>
-    <div class="mx-auto grid max-w-3xl grid-cols-5 md:flex md:max-w-none md:flex-col md:gap-1 md:px-3">
-      <a href="#inbox" data-nav="inbox" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400 md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="inbox"></span>Inbox</a>
-      <a href="#tarjetas" data-nav="tarjetas" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400 md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="card"></span>Tarjetas</a>
-      <a href="#movimientos" data-nav="movimientos" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400 md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="table"></span>Movimientos</a>
-      <a href="#calendario" data-nav="calendario" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400 md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="calendar"></span>Cuotas</a>
-      <a href="#resumen" data-nav="resumen" class="flex flex-col items-center gap-1 py-2 text-xs text-slate-400 md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="chart"></span>Resumen</a>
+    <div class="mx-auto grid max-w-3xl grid-cols-6 md:flex md:max-w-none md:flex-col md:gap-1 md:px-3">
+      <a href="#inbox" data-nav="inbox" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="inbox"></span>Inbox</a>
+      <a href="#tarjetas" data-nav="tarjetas" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="card"></span>Tarjetas</a>
+      <a href="#movimientos" data-nav="movimientos" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="table"></span><span class="md:hidden">Movs.</span><span class="hidden md:inline">Movimientos</span></a>
+      <a href="#calendario" data-nav="calendario" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="calendar"></span>Cuotas</a>
+      <a href="#resumen" data-nav="resumen" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="chart"></span>Resumen</a>
+      <a href="#categorias" data-nav="categorias" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-lg md:px-3 md:py-2.5 md:text-sm md:hover:bg-slate-800"><span data-icon="tag"></span><span class="md:hidden">Categ.</span><span class="hidden md:inline">Categorías</span></a>
     </div>
   </nav>
 
@@ -81,6 +82,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=10" defer></script>
+  <script src="app.js?v=11" defer></script>
 </body>
 </html>
