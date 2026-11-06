@@ -179,7 +179,7 @@
   async function viewInbox(root, refetch = true) {
     if (refetch || !inbox.data) {
       root.replaceChildren(loading('Cargando movimientos…'));
-      const [d, c, cards, cal] = await Promise.allSettled([api('getInbox'), api('getCreditInbox'), api('getCards'), api('getCalendar')]);
+      const [d, c, cards, cal, pend] = await Promise.allSettled([api('getInbox'), api('getCreditInbox'), api('getCards'), api('getCalendar'), api('getPendingEstado')]);
       if (d.status === 'rejected') {
         if (d.reason.code !== 'UNAUTHORIZED' && d.reason.code !== 'NO_CREDENTIALS') root.replaceChildren(failure(d.reason, () => viewInbox(root)));
         return;
@@ -188,6 +188,7 @@
         debito: d.value, credito: c.status === 'fulfilled' ? c.value : null, creditoError: c.status === 'rejected' ? c.reason : null,
         cards: cards.status === 'fulfilled' ? cards.value : null, cardsError: cards.status === 'rejected' ? cards.reason : null,
         cal: cal.status === 'fulfilled' ? cal.value : null, calError: cal.status === 'rejected' ? cal.reason : null,
+        pend: pend.status === 'fulfilled' ? pend.value : null, pendError: pend.status === 'rejected' ? pend.reason : null,
       };
       mergeCats(d.value.categories);
       if (c.status === 'fulfilled') mergeCats(c.value.categories);
@@ -201,8 +202,8 @@
   function phaseBar(root, badge1) {
     const data = inbox.data;
     const n1 = (data.debito ? data.debito.items.length : 0) + (data.credito ? data.credito.items.length : 0);
-    const defs = [[1, 'Categorizar', n1], [2, 'Créditos por pagar', data.cards ? unpaidList(data).length : '–'], [3, 'Cuotas del mes', data.cal ? dueFees(data).length : '–']];
-    return h('div', { class: 'mb-4 grid grid-cols-3 gap-1 rounded-xl border border-slate-800 bg-slate-900 p-1', role: 'tablist', 'aria-label': 'Fases de revisión' },
+    const defs = [[1, 'Categorizar', n1], [2, 'Créditos por pagar', data.cards ? unpaidList(data).length : '–'], [3, 'Cuotas del mes', data.cal ? dueFees(data).length : '–'], [4, 'Por procesar', data.pend ? (data.pend.items || []).length : '–']];
+    return h('div', { class: 'mb-4 grid grid-cols-2 gap-1 rounded-xl sm:grid-cols-4 border border-slate-800 bg-slate-900 p-1', role: 'tablist', 'aria-label': 'Fases de revisión' },
       defs.map(([n, label, c]) => {
         const on = inbox.phase === n;
         const b = h('span', { class: 'ml-1.5 rounded-full px-2 py-0.5 text-xs ' + (c === 0 ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-amber-300') }, c === 0 ? '✓' : c);
@@ -264,12 +265,41 @@
       })));
   }
 
+  // Movimientos de Crédito con Estado «Pendiente»: se marcan cuando ya aparecen procesados en la app del banco.
+  function phaseProcess(root) {
+    const data = inbox.data;
+    if (!data.pend) return failure(data.pendError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root));
+    const items = data.pend.items || [];
+    const warn = data.pend.withoutId > 0 && h('p', { class: 'mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100' }, `${data.pend.withoutId} fila(s) pendientes sin ID no aparecen aquí. Ejecuta fosBackfillIds() en Apps Script.`);
+    if (!items.length) return h('div', {}, warn, h('div', { class: 'rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-300' }, h('p', { class: 'text-2xl' }, '✓'), h('p', { class: 'mt-2 text-sm' }, 'No hay movimientos de crédito pendientes de procesar.')));
+    return h('div', {},
+      warn,
+      h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Movimientos de tarjeta con Estado «Pendiente». Marca ✓ los que ya figuran como procesados en la app del banco.'),
+      h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, items.map((p) => {
+        const box = h('input', { type: 'checkbox', class: 'h-5 w-5 shrink-0 accent-emerald-500', 'aria-label': `Marcar como procesado: ${p.detalle}` });
+        box.addEventListener('change', async () => {
+          if (!box.checked) return;
+          box.disabled = true;
+          try {
+            await api('setEstado', { id: p.id, estado: 'Procesado' });
+            data.pend.items = data.pend.items.filter((x) => x.id !== p.id);
+            toast(`Procesado: ${p.detalle}`); renderInbox(root);
+          } catch (e) { box.checked = false; box.disabled = false; toast(errText(e), 'err'); }
+        });
+        return h('li', { class: 'flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
+          h('div', { class: 'min-w-0 flex-1' },
+            h('p', { class: 'truncate font-medium' }, p.detalle),
+            h('p', { class: 'truncate text-xs text-slate-500' }, `${p.tarjeta} · ${fmtDate(p.fecha)} · ${p.tipo}${p.cuotas ? ` · ${p.cuotas} cuotas` : ''}`)),
+          h('span', { class: 'tabular-nums ' + (p.monto < 0 ? 'text-rose-300' : 'text-emerald-300') }, fmtMoney(p.monto)));
+      })));
+  }
+
   function renderInbox(root) {
     const data = inbox.data;
     if (inbox.phase !== 1) {
       root.replaceChildren(
         h('div', { class: 'mb-3 flex justify-end' }, h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar')),
-        phaseBar(root), inbox.phase === 2 ? phasePay(root) : phaseFees(root));
+        phaseBar(root), inbox.phase === 2 ? phasePay(root) : inbox.phase === 3 ? phaseFees(root) : phaseProcess(root));
       return;
     }
     const counts = {};
