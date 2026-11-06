@@ -93,6 +93,31 @@
     requestAnimationFrame(step);
     return el;
   }
+  /* ---------- color representativo de cada tarjeta (por nombre) ---------- */
+  const CARD_COLORS = [
+    [/bcp/, { c: '#2563eb', name: 'azul' }],             // BCP Light
+    [/falabella/, { c: '#15803d', name: 'verde oscuro' }], // Falabella
+    [/interbank/, { c: '#4ade80', name: 'verde claro' }],  // Interbank
+    [/^io\b|\bio$/, { c: '#000000', name: 'negro', dark: true }], // IO
+  ];
+  const cardColor = (name) => { const k = normKey(name); const hit = CARD_COLORS.find(([re]) => re.test(k)); return hit ? hit[1] : { c: '#64748b', name: 'gris' }; };
+  /** Barra o punto con el color de la tarjeta (el negro de IO lleva un aro claro para verse sobre el fondo oscuro). */
+  const cardFill = (name) => { const x = cardColor(name); return x.dark ? 'background:#000;box-shadow:inset 0 0 0 1px rgba(255,255,255,.35)' : `background:${x.c}`; };
+  function cardChip(name) {
+    if (!name) return null;
+    const x = cardColor(name);
+    const style = x.dark ? 'background:rgba(0,0,0,.65);border-color:rgba(255,255,255,.22);color:#f1f5f9'
+      : `background:${x.c}24;border-color:${x.c}66;color:#f1f5f9`;
+    return h('span', { class: 'inline-flex max-w-full items-center gap-1.5 truncate rounded-full border px-2 py-0.5 text-[11px] font-medium', style, title: `Tarjeta ${name}` },
+      h('span', { class: 'h-2 w-2 shrink-0 rounded-full', style: cardFill(name), 'aria-hidden': 'true' }), name);
+  }
+  function catChip(cat) {
+    return cat
+      ? h('span', { class: 'inline-flex max-w-full items-center gap-1 truncate rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-200', title: `Categoría ${cat}` }, catLabel(cat))
+      : h('span', { class: 'inline-flex items-center rounded-full border border-dashed border-white/15 px-2 py-0.5 text-[11px] text-slate-500', title: 'Sin categoría' }, 'Sin categoría');
+  }
+  const tagRow = (...kids) => h('div', { class: 'mt-1 flex min-w-0 flex-wrap items-center gap-1.5' }, kids);
+
   function doneState(msg) { // estado vacío «todo al día»
     return h('div', { class: 'card rounded-2xl border border-slate-800 bg-slate-900 px-6 py-10 text-center text-slate-300' },
       h('div', { class: 'done-badge mx-auto flex h-12 w-12 items-center justify-center rounded-full text-xl text-emerald-300', 'aria-hidden': 'true' }, '✓'),
@@ -353,7 +378,8 @@
         return h('li', { class: 'card card-hover flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
           h('div', { class: 'min-w-0 flex-1' },
             h('p', { class: 'truncate font-medium' }, p.detalle),
-            h('p', { class: 'truncate text-xs text-slate-500' }, `${p.tarjeta} · ${fmtD(p.fecha)} · ${p.tipo}${p.vence ? ` · vence ${fmtD(p.vence)}` : ''}`)),
+            tagRow(cardChip(p.tarjeta), p.tipo === 'Préstamo' ? null : catChip(p.categoria)),
+            h('p', { class: 'mt-1 truncate text-xs text-slate-500' }, `${fmtD(p.fecha)} · ${p.tipo}${p.vence ? ` · vence ${fmtD(p.vence)}` : ''}`)),
           h('span', { class: 'tabular-nums' }, fmtMoney(p.monto)));
       })));
   }
@@ -363,7 +389,7 @@
     if (!data.cal) return failure(data.calError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root));
     const rows = dueFees(data);
     if (!rows.length) return doneState('No quedan cuotas por pagar este mes.');
-    const total = rows.reduce((s, r) => s + r.montos[0], 0);
+    const total = rows.reduce((s, r) => s + Math.abs(r.montos[0]), 0); // por pagar: en positivo, como la fase 2
     return h('div', {},
       h('p', { class: 'mb-3 text-sm text-slate-400' }, `Cuotas de ${data.cal.months[0]} sin pagar · total `, h('b', { class: 'text-slate-200' }, fmtMoney(total)), ' · marca ✓ cuando la pagues.'),
       h('ul', { class: 'grid gap-2 lg:grid-cols-2' }, rows.map((r) => {
@@ -377,8 +403,8 @@
           } catch (e) { box.checked = false; box.disabled = false; toast(errText(e), 'err'); }
         });
         return h('li', { class: 'card card-hover flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
-          h('div', { class: 'min-w-0 flex-1' }, h('p', { class: 'truncate font-medium' }, r.compra), r.tarjeta && h('p', { class: 'truncate text-xs text-slate-500' }, r.tarjeta)),
-          h('span', { class: 'tabular-nums' }, fmtMoney(r.montos[0])));
+          h('div', { class: 'min-w-0 flex-1' }, h('p', { class: 'truncate font-medium' }, r.compra), tagRow(cardChip(r.tarjeta), catChip(r.categoria))),
+          h('span', { class: 'tabular-nums' }, fmtMoney(Math.abs(r.montos[0]))));
       })));
   }
 
@@ -406,7 +432,8 @@
         return h('li', { class: 'card card-hover flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
           h('div', { class: 'min-w-0 flex-1' },
             h('p', { class: 'truncate font-medium' }, p.detalle),
-            h('p', { class: 'truncate text-xs text-slate-500' }, `${p.tarjeta} · ${fmtDate(p.fecha)} · ${p.tipo}${p.cuotas ? ` · ${p.cuotas} cuotas` : ''}`)),
+            tagRow(cardChip(p.tarjeta), normKey(p.tipo) === 'egreso' ? catChip(p.categoria) : null), // pagos/abonos no llevan categoría
+            h('p', { class: 'mt-1 truncate text-xs text-slate-500' }, `${fmtDate(p.fecha)} · ${p.tipo}${p.cuotas ? ` · ${p.cuotas} cuotas` : ''}`)),
           h('span', { class: 'tabular-nums ' + (p.monto < 0 ? 'text-rose-300' : 'text-emerald-300') }, fmtMoney(p.monto)));
       })));
   }
@@ -415,7 +442,7 @@
   function liquidity(data) {
     const deb = data.sum && data.sum.debito ? data.sum.debito.cierre : null;                 // neto actual de todas las cuentas de Débito
     const porPagar = data.cards ? r2(unpaidList(data).reduce((s, p) => s + p.monto, 0)) : null; // fase 2: créditos por pagar
-    const cuotas = data.cal ? r2(dueFees(data).reduce((s, r) => s + r.montos[0], 0)) : null;    // fase 3: cuotas del mes sin pagar
+    const cuotas = data.cal ? r2(dueFees(data).reduce((s, r) => s + Math.abs(r.montos[0]), 0)) : null; // fase 3: cuotas del mes sin pagar (vienen con signo de consumo)
     const cred = porPagar == null || cuotas == null ? null : r2(porPagar + cuotas);
     const liq = deb == null || cred == null ? null : r2(deb - cred);
     const tile = (label, v, note, tone, extra = '') => h('div', { class: 'card rounded-2xl border border-slate-800 bg-slate-900 p-3 sm:p-4 ' + extra },
@@ -606,7 +633,9 @@
         h('div', { class: 'min-w-0' },
           h('p', { class: 'truncate font-medium' }, it.detalle || '(sin detalle)'),
           it.descripcion && h('p', { class: 'truncate text-sm text-slate-400' }, it.descripcion),
-          h('p', { class: 'mt-0.5 text-xs text-slate-500' }, `${fmtDate(it.fecha)} · ${it.banco}`, it.cuotas ? ` · ${it.cuotas} cuotas` : '')),
+          kind === 'credito'
+            ? h('div', { class: 'mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500' }, cardChip(it.banco), `${fmtDate(it.fecha)}${it.cuotas ? ` · ${it.cuotas} cuotas` : ''}`)
+            : h('p', { class: 'mt-0.5 text-xs text-slate-500' }, `${fmtDate(it.fecha)} · ${it.banco}`, it.cuotas ? ` · ${it.cuotas} cuotas` : '')),
         h('div', { class: 'flex shrink-0 flex-col items-end gap-1' },
           h('p', { class: 'font-semibold tabular-nums ' + ((it.monto || 0) < 0 ? 'text-rose-300' : 'text-emerald-300') }, fmtMoney(it.monto)), flag)),
       h('div', { class: 'mt-3' }, h('div', {}, sel, newInp, emoBox)),
@@ -1216,7 +1245,7 @@
         h('th', { class: 'sticky left-0 z-10 min-w-[10rem] bg-slate-900 px-3 py-2 text-left font-medium text-slate-300' }, 'Compra'),
         d.months.map((m, i) => h('th', { class: 'px-3 py-2 text-right font-medium capitalize text-slate-400' + (i === curIdx ? ' bg-emerald-500 !text-slate-950' : ''), 'data-current': i === curIdx ? '1' : null }, m)));
       const body = d.rows.map((r) => h('tr', { class: 'border-t border-slate-800' },
-        h('td', { class: 'sticky left-0 z-10 bg-slate-900 px-3 py-2' }, h('div', { class: 'font-medium' }, r.compra), h('div', { class: 'text-xs text-slate-500' }, r.tarjeta)),
+        h('td', { class: 'sticky left-0 z-10 bg-slate-900 px-3 py-2' }, h('div', { class: 'font-medium' }, r.compra), r.tarjeta ? h('div', { class: 'mt-1' }, cardChip(r.tarjeta)) : null),
         r.montos.map((v, i) => {
           if (v == null) return h('td', { class: cell + ' text-slate-700' + hi(i) }, '·');
           const paid = !!r.pagadas[i];
@@ -1313,9 +1342,10 @@
       })));
     if (details) details.addEventListener('toggle', () => cardsUi.open.set(c.tarjeta, details.open));
 
-    return h('section', { class: 'card rounded-xl border border-slate-800 bg-slate-900 p-4' },
+    return h('section', { class: 'card overflow-hidden rounded-xl border border-slate-800 bg-slate-900 p-4' },
+      h('div', { class: '-mx-4 -mt-4 mb-3 h-1', style: cardFill(c.tarjeta), 'aria-hidden': 'true' }), // franja con el color de la tarjeta
       h('div', { class: 'flex items-baseline justify-between' },
-        h('h3', { class: 'font-semibold' }, c.tarjeta),
+        h('h3', { class: 'flex items-center gap-2 font-semibold' }, h('span', { class: 'h-2.5 w-2.5 rounded-full', style: cardFill(c.tarjeta), 'aria-hidden': 'true' }), c.tarjeta),
         h('span', { class: 'text-xs text-slate-500' }, `Límite ${fmtMoney(c.limite)}`)),
       h('div', { class: 'mt-3' },
         h('div', { class: 'flex items-baseline justify-between text-sm' },
@@ -1384,10 +1414,10 @@
       const gray = r[labelKey] === 'Sin categoría';
       return h('li', {},
         h('div', { class: 'flex items-baseline justify-between gap-3 text-sm' },
-          h('span', { class: 'truncate text-slate-200' }, labelKey === 'categoria' ? catLabel(r[labelKey]) : r[labelKey]),
+          labelKey === 'tarjeta' ? cardChip(r.tarjeta) : h('span', { class: 'truncate text-slate-200' }, labelKey === 'categoria' ? catLabel(r[labelKey]) : r[labelKey]),
           h('span', { class: 'shrink-0 tabular-nums text-slate-300' }, `${fmtMoney(r.monto)} · ${total ? Math.round((r.monto / total) * 100) : 0}%`)),
         h('div', { class: 'mt-1 h-2 rounded-r bg-slate-800', role: 'presentation' },
-          h('div', { class: 'bar-grow h-2 rounded-r', style: `width:${Math.max(2, (r.monto / max) * 100)}%;background:${gray ? '#64748b' : 'linear-gradient(90deg,#059669,#34d399)'}` })));
+          h('div', { class: 'bar-grow h-2 rounded-r', style: `width:${Math.max(2, (r.monto / max) * 100)}%;` + (labelKey === 'tarjeta' ? cardFill(r.tarjeta) : `background:${gray ? '#64748b' : 'linear-gradient(90deg,#059669,#34d399)'}`) })));
     }));
   }
 
