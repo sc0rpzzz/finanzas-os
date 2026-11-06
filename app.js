@@ -674,6 +674,9 @@
     BAD_CUENTA: 'Cuenta no reconocida.', BAD_CATEGORIA: 'Categoría no permitida.', BAD_AMOUNT: 'Monto inválido.', BAD_ESTADO: 'Estado inválido.',
   });
 
+  // con el panel abierto, el contenido usa todo el ancho que queda a su izquierda (sin centrarse ni dejar huecos)
+  const drawerLayout = (on) => { const v = $('#view'); if (v) ['md:!mr-[30rem]', 'md:!max-w-none', 'md:!mx-0'].forEach((c) => v.classList.toggle(c, !!on)); };
+
   function buildMov(root) {
     const d = () => mov.d;
     const tilesBox = h('div', { class: 'mb-3 grid grid-cols-3 gap-2' });
@@ -682,8 +685,9 @@
     const more = h('button', { type: 'button', class: BTN_GHOST + ' mt-3 hidden', onclick: () => { mov.limit += 200; drawTable(); } }, 'Mostrar más');
     const controls = h('div', { class: 'mb-3 space-y-2' });
     const drawerBox = h('div', {});
-    const el = h('div', { class: mov.drawer ? 'md:mr-[31rem]' : '' }, controls, tilesBox, info, wrap, more);
+    const el = h('div', {}, controls, tilesBox, info, wrap, more);
     root.replaceChildren(el, drawerBox);
+    drawerLayout(mov.drawer);
     mov.ui = { root, el, refresh };
 
     /* ---- controles ---- */
@@ -877,7 +881,7 @@
     function toggleDrawer(on) {
       mov.drawer = on;
       if (on && !draftList().length) draftList().push(newDraft());
-      el.className = on ? 'md:mr-[31rem]' : '';
+      drawerLayout(on);
       drawControls(); drawDrawer();
     }
     const TIPOS = { debito: [['Egreso', 'Egreso'], ['Ingreso', 'Ingreso'], ['Pago', 'Pago de tarjeta']], credito: [['Directo', 'Consumo directo'], ['Cuotas', 'Consumo en cuotas'], ['Abono', 'Abono / ingreso']] };
@@ -1451,6 +1455,7 @@
   const currentView = () => { const v = location.hash.slice(1); return VIEWS[v] ? v : 'inbox'; };
   function route() {
     navTok++;
+    drawerLayout(false);
     daily.sync();
     if (!hasCreds()) { openSetup(); return; }
     const v = currentView();
