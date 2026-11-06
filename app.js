@@ -772,7 +772,7 @@
         h('div', { class: 'flex flex-col gap-2 sm:flex-row' }, selCta, selMes, q));
     }
 
-    /* ---- tiles: Débito = Ingresos / Egresos / Neto · Crédito = Ingresos / Egresos / Saldo disponible ---- */
+    /* ---- tiles: Débito = Ingresos / Egresos / Neto · Crédito = Consumido / Saldo disponible (suman la línea de crédito) ---- */
     function scopeRows() {
       const D = d(), iF = colIdx(D, 'Fecha'), needle = normKey(mov.q);
       return D.rows.filter((r) => (!mov.mes || (r[iF] || '').startsWith(mov.mes)) && (!needle || normKey(r.map((v) => (v == null ? '' : v)).join(' ')).includes(needle)));
@@ -781,12 +781,29 @@
       const D = d(), cred = mov.hoja === 'credito';
       const filtered = !!(mov.mes || mov.q);
       const base = filtered && !D.truncated ? scopeTotals(D, scopeRows()) : D.totales;
-      const fx = draftEffect(mov.mes);
+      const fx = draftEffect(cred ? '' : mov.mes); // en Crédito los indicadores son el estado actual de la tarjeta (sin filtro de mes)
       const tile = (label, v, after, tone, note) => h('div', { class: 'card rounded-xl border border-slate-800 bg-slate-900 p-3' },
         h('p', { class: 'text-xs text-slate-400' }, label),
         h('p', { class: 'mt-1 text-lg font-semibold tabular-nums tracking-tight sm:text-2xl ' + tone }, countMoney(v, `mov:${label}`)),
         after != null && fx.n ? h('p', { class: 'text-xs tabular-nums text-amber-300' }, `quedaría ${fmtMoney(after)}`) : null,
         note ? h('p', { class: 'text-[11px] text-slate-500' }, note) : null);
+      if (cred) { // Crédito: Consumido + Saldo disponible = línea de crédito (hoja Tarjetas)
+        const net = fx.ingresos - fx.egresos;
+        const saldo = D.totales.saldo, lim = typeof D.limite === 'number' ? D.limite : null;
+        const cons = lim == null ? null : r2(lim - saldo);
+        const pct = lim ? Math.max(0, Math.min(1, cons / lim)) : null;
+        tilesBox.className = 'mb-3 grid grid-cols-2 gap-2';
+        tilesBox.replaceChildren(...[
+          tile('Consumido', cons, cons == null ? null : r2(cons - net), 'text-rose-300',
+            lim == null ? 'configura el límite en la hoja Tarjetas' : `gastos − pagos · ${Math.round(pct * 100)}% de la línea`),
+          tile('Saldo disponible', saldo, r2(saldo + net), saldo < 0 ? 'text-rose-300' : 'text-emerald-300',
+            lim == null ? 'actual de la tarjeta' : `línea de crédito ${fmtMoney(lim)}`),
+          lim ? h('div', { class: 'col-span-2 h-1.5 overflow-hidden rounded-full bg-emerald-500/25', role: 'img', 'aria-label': `Consumido ${Math.round(pct * 100)}% de la línea de crédito` },
+            h('div', { class: 'h-full rounded-full', style: `width:${pct * 100}%;background:linear-gradient(90deg,#fb7185,#e11d48)` })) : null,
+        ].filter(Boolean));
+        return;
+      }
+      tilesBox.className = 'mb-3 grid grid-cols-3 gap-2';
       const third = cred ? D.totales.saldo : base.neto;
       const thirdFx = cred ? D.totales.saldo + (fx.ingresos - fx.egresos) : base.neto + (fx.ingresos - fx.egresos);
       const hasFx = (mov.mes ? fx : draftEffect('')).n;
@@ -855,7 +872,15 @@
       if (kind === 'ro') { td.className += 'text-slate-400' + dim; td.textContent = blank ? '·' : String(v); return td; }
       if (kind === 'bool') {
         td.className += 'text-center';
-        const cb = h('input', { type: 'checkbox', class: 'h-4 w-4 accent-emerald-500', 'aria-label': 'Pagado', disabled: lockedBase || dupRow || normKey(r[colIdx(D, 'Tipo')]) !== 'egreso' });
+        // la casilla solo aparece donde se puede usar: consumos directos (no pagos/abonos ni compras en cuotas)
+        const iMod = colIdx(D, 'Modalidad');
+        const enCuotas = iMod >= 0 && normKey(r[iMod]).includes('cuota');
+        if (normKey(r[colIdx(D, 'Tipo')]) !== 'egreso' || dupRow) return td;
+        if (enCuotas && v !== true) {
+          td.append(h('span', { class: 'text-[11px] text-slate-500', title: 'Las compras en cuotas se marcan mes a mes en Cuotas' }, 'en Cuotas'));
+          return td;
+        }
+        const cb = h('input', { type: 'checkbox', class: 'h-4 w-4', 'aria-label': 'Pagado', title: v === true ? 'Pagado: toca para desmarcar' : 'Marcar como pagado', disabled: lockedBase });
         cb.checked = v === true;
         cb.addEventListener('change', () => saveCell(r, key, cb.checked, cb.checked, v === true));
         td.append(cb); return td;

@@ -117,6 +117,23 @@
     .done-badge { background: radial-gradient(circle, rgba(16, 185, 129, .28), rgba(16, 185, 129, .08)); box-shadow: 0 0 0 1px rgba(52, 211, 153, .3), 0 0 30px -6px var(--glow); animation: popIn .45s var(--ease) both; }
     .busy-bar { background: linear-gradient(90deg, transparent, #34d399, #22d3ee, transparent); background-size: 200% 100%; animation: busy 1.1s linear infinite; }
     .spin { animation: spin 1s linear infinite; }
+    /* indicador de actividad: anillo pequeño y tenue en la esquina superior derecha */
+    .busy-dot { position: fixed; z-index: 70; top: calc(env(safe-area-inset-top) + 3px); right: 3px; width: 10px; height: 10px; border-radius: 999px;
+      border: 1.5px solid rgba(148, 163, 184, .18); border-top-color: rgba(52, 211, 153, .75); opacity: .7; pointer-events: none; animation: spin .8s linear infinite; }
+    @media (min-width: 768px) { .busy-dot { top: 12px; right: 12px; width: 13px; height: 13px; } }
+    /* casillas propias: se distingue a simple vista cuál se puede marcar */
+    .fos input[type=checkbox] { appearance: none; -webkit-appearance: none; width: 18px; height: 18px; flex-shrink: 0; border-radius: 6px; cursor: pointer;
+      border: 1.5px solid rgba(148, 163, 184, .55); background: rgba(2, 6, 23, .4); display: inline-grid; place-content: center; vertical-align: middle;
+      transition: background .15s, border-color .15s, box-shadow .15s, transform .1s; }
+    .fos input[type=checkbox]::after { content: ''; width: 10px; height: 10px; transform: scale(0); transition: transform .15s var(--ease);
+      background: #022c22; clip-path: polygon(14% 52%, 0 66%, 38% 100%, 100% 22%, 86% 8%, 37% 70%); }
+    .fos input[type=checkbox]:hover:not(:disabled) { border-color: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, .15); }
+    .fos input[type=checkbox]:checked { background: linear-gradient(135deg, #34d399, #10b981); border-color: #34d399; box-shadow: 0 0 12px -2px var(--glow); }
+    .fos input[type=checkbox]:checked::after { transform: scale(1); }
+    .fos input[type=checkbox]:active:not(:disabled) { transform: scale(.9); }
+    .fos input[type=checkbox]:focus-visible { outline: 2px solid #6ee7b7; outline-offset: 2px; }
+    .fos input[type=checkbox]:disabled { cursor: not-allowed; opacity: .3; border-style: dashed; }
+    .fos input[type=checkbox].h-5 { width: 20px; height: 20px; }
     dialog[open] { animation: popIn .22s var(--ease); }
     dialog::backdrop { background: rgb(2 6 23 / .7); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
     .splash-mark { animation: pulseRing 1.6s ease-out infinite; }
@@ -135,7 +152,7 @@
     <div class="h-1 w-44 overflow-hidden rounded-full bg-slate-800/80"><div class="busy-bar h-full w-full rounded-full"></div></div>
     <p class="text-xs text-slate-500">Preparando tus datos…</p>
   </div>
-  <div id="busy" class="busy-bar hidden fixed inset-x-0 top-0 z-50 h-0.5" role="progressbar" aria-label="Actualizando"></div>
+  <div id="busy" class="busy-dot hidden" role="progressbar" aria-label="Actualizando"></div>
 
   <header class="glass sticky top-0 z-20 border-b border-white/5 safe-t md:hidden">
     <div class="mx-auto flex max-w-3xl items-center justify-between gap-2 px-4 py-3">
@@ -225,6 +242,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=21" defer></script>
+  <script src="app.js?v=22" defer></script>
 </body>
 </html>
