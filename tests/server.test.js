@@ -336,6 +336,10 @@
       env.api.fosNightly();
       const m = env.telegram[0];
       has(m, 'Liquidez real: ' + money(before - 75)); has(m, 'Total crédito S/ 75.00'); has(m, 'Préstamos S/ 100.00 (aparte');
+      env.telegram.length = 0; // también cuenta como préstamo un consumo con categoría «Préstamo»
+      env.sheets['Crédito'].etlAppend([atToday(10), 'IO_PRE2', 'Egreso', 'Procesado', 'IO', 'Inkafarma de la mamá', -50, '', 'Directo', '', '', 'Préstamo']);
+      env.api.fosNightly();
+      has(env.telegram[0], 'Total crédito S/ 75.00'); has(env.telegram[0], 'Préstamos S/ 150.00 (aparte');
     }],
     ['fosNightly: el domingo agrega la semana (y otro día no)', (make) => {
       const dow = new Date(daysAgo(0, 12, 0).getTime() - 5 * 3600000).getUTCDay();

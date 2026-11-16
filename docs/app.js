@@ -451,8 +451,9 @@
   }
 
   /* Indicadores del Inbox: Débito y Crédito se muestran por separado; la liquidez real es solo su diferencia (no se suman).
-     Los préstamos (Tipo «Prestamo» en Crédito) van en su propio cuadro: no entran en el total de crédito ni en la liquidez. */
-  const isLoan = (p) => p.tipo === 'Préstamo';
+     Los préstamos (Tipo «Prestamo» o categoría «Préstamo» en Crédito) van en su propio cuadro: no entran en el total de crédito ni en la liquidez. */
+  // préstamo = Tipo «Prestamo» o un consumo con categoría «Préstamo(s)»
+  const isLoan = (p) => p.tipo === 'Préstamo' || /^prestamos?$/.test(normKey(p.categoria));
   function liquidity(data) {
     const deb = data.sum && data.sum.debito ? data.sum.debito.cierre : null;                 // neto actual de todas las cuentas de Débito
     const unpaid = data.cards ? unpaidList(data) : null;
