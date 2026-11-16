@@ -80,6 +80,7 @@ function fosComputeCards_() {
     ['Fecha', 'Tipo', 'Banco / Cuenta', 'Detalle/Comercio', 'Monto', 'Pagado', 'Modalidad']);
   const crId = cr.opt('ID');
   const crCat = cr.opt('Categoría');
+  const crEst = cr.opt('Estado');
   const cuotas = fosCuotaItems_();
   const curKey = fosMonthKey_(cuotas.nowIdx);
   const metaI = tc.opt('Meta %');
@@ -127,7 +128,7 @@ function fosComputeCards_() {
       }
       pendientes.push({ id: crId >= 0 ? String(x[crId]).trim() : '', fecha: date10, detalle: String(x[cr.idx('Detalle/Comercio')]), monto: fosR2_(amount),
         tipo: tipo === 'prestamo' ? 'Préstamo' : (isClosed ? 'Estado cerrado' : 'Ciclo actual'), vence: pago,
-        categoria: crCat >= 0 ? String(x[crCat]).trim() : '' });
+        categoria: crCat >= 0 ? String(x[crCat]).trim() : '', estado: crEst >= 0 ? String(x[crEst]).trim() : '' });
     });
     pendientes.sort(function (a, b) { return a.fecha.localeCompare(b.fecha); });
 

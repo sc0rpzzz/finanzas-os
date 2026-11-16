@@ -327,7 +327,15 @@
       const s = ok(env.call('getSummary')), cards = ok(env.call('getCards')).cards;
       const cred = cards.reduce((a, c) => a + c.pendientes.reduce((x, p) => x + p.monto, 0) + c.cuotaMes, 0);
       has(m, 'Liquidez real: ' + money(Math.round((s.debito.cierre - cred) * 100) / 100), 'liquidez igual a la del Inbox');
-      has(m, 'Taxi', 'lo cargado a mano sí sale en el resumen'); has(m, 'Por revisar'); has(m, 'Yape'); has(m, 'IO: disponible S/ 150.00 · consumido S/ 1,050.00');
+      has(m, 'Taxi', 'lo cargado a mano sí sale en el resumen'); has(m, 'Cuadre de hoy pendiente'); has(m, '☐ Categorizar'); has(m, 'Yape'); has(m, 'IO: disponible S/ 150.00 · consumido S/ 1,050.00');
+    }],
+    ['fosNightly: los préstamos van aparte y no restan de la liquidez', (make) => {
+      const env = make(atToday(21));
+      const before = ok(env.call('getSummary')).debito.cierre;
+      env.sheets['Crédito'].etlAppend([atToday(9), 'IO_PRE', 'Prestamo', 'Procesado', 'IO', 'Préstamo a Ana', -100, '', 'Directo', '', '', '']);
+      env.api.fosNightly();
+      const m = env.telegram[0];
+      has(m, 'Liquidez real: ' + money(before - 75)); has(m, 'Total crédito S/ 75.00'); has(m, 'Préstamos S/ 100.00 (aparte');
     }],
     ['fosNightly: el domingo agrega la semana (y otro día no)', (make) => {
       const dow = new Date(daysAgo(0, 12, 0).getTime() - 5 * 3600000).getUTCDay();
@@ -349,10 +357,85 @@
       const env = make(atToday(10));
       env.triggers.push({ fn: 'fosNotifyPending', hours: 1 }, { fn: 'ejecutarETLCompleto', hours: 1 });
       env.api.fosInstallTriggers();
-      eq(env.triggers.map((x) => x.fn).sort(), ['ejecutarETLCompleto', 'fosNightly', 'fosNotifyCards', 'fosWatch'], 'no toca el trigger del ETL');
+      eq(env.triggers.map((x) => x.fn).sort(), ['ejecutarETLCompleto', 'fosNightly', 'fosNotifyCards', 'fosNudge', 'fosWatch'], 'no toca el trigger del ETL');
+      eq(env.triggers.find((x) => x.fn === 'fosNudge').hours, 1);
       eq(env.triggers.find((x) => x.fn === 'fosNightly').atHour, 21); eq(env.triggers.find((x) => x.fn === 'fosNotifyCards').atHour, 8);
     }],
+    ['RPA: runEtl corre el ETL, cuenta lo nuevo y no permite dos corridas a la vez', (make) => {
+      const env = make(atToday(10));
+      const r = ok(env.call('runEtl'));
+      eq([r.debito, r.credito], [1, 1]);
+      assert(row(env, 'Debito', 'BCP_DEB_RPA') && row(env, 'Crédito', 'FAL_RPA'), 'el ETL escribió');
+      env.sheets.Debito.hooks.beforeAppend = () => { const again = env.call('runEtl'); if (again.ok || again.error !== 'ETL_RUNNING') throw new Error('debía ser ETL_RUNNING'); };
+      ok(env.call('runEtl'), 'la 2.ª corrida (con otra intentando entrar) termina bien'); env.sheets.Debito.hooks = {};
+      ok(env.call('runEtl'), 'la bandera se libera al terminar');
+      env.api.fosEtlProgramado(); // la versión para el trigger horario tampoco falla
+    }],
+    ['Cuadre del día: pendiente → hecho (Inbox, duplicados, app, Yape) y la racha suma', (make) => {
+      const env = make(atToday(12));
+      const r0 = ok(env.call('getRacha'));
+      eq([r0.cuadrado, r0.racha], [false, 0]);
+      eq(r0.items.find((i) => i.key === 'app').ok, true, 'usar la app cuenta');
+      eq(r0.items.find((i) => i.key === 'inbox').n, 5);
+      cuadrar(env);
+      const r1 = ok(env.call('getRacha'));
+      eq([r1.cuadrado, r1.racha, r1.hechoHoy], [true, 1, true]);
+      const hoy = JSON.parse(env.props.FOS_RACHA).d[0];
+      env.props.FOS_RACHA = JSON.stringify({ d: [fosDay(hoy, -5), fosDay(hoy, -3), fosDay(hoy, -2), fosDay(hoy, -1), hoy], best: 1 });
+      const r2 = ok(env.call('getRacha'));
+      eq([r2.racha, r2.best], [4, 4], 'se encadena con los días seguidos anteriores (un hueco corta la racha)');
+    }],
+    ['getCards: los pendientes traen su Estado', (make) => {
+      const env = make(atToday(12));
+      const p = ok(env.call('getCards')).cards[0].pendientes;
+      eq(p.find((x) => x.id === 'IO_1').estado, 'Pendiente');
+    }],
+    ['fosNudge: insiste a sus horas, una vez por hora, y escala hasta la última llamada', (make) => {
+      let now = atToday(9, 30);
+      const env = make(() => now);
+      env.props.FOS_RACHA = JSON.stringify({ d: [fosDay(fecha10(atToday(12)), -1)], best: 1 }); // ayer cuadró
+      env.api.fosNudge(); eq(env.telegram.length, 0, '9:30 no es hora de aviso');
+      now = atToday(10, 5); env.api.fosNudge(); eq(env.telegram.length, 1);
+      has(env.telegram[0], 'Te falta'); has(env.telegram[0], '☐ Categorizar'); has(env.telegram[0], 'racha de <b>1 día</b> está en riesgo');
+      now = atToday(10, 40); env.api.fosNudge(); eq(env.telegram.length, 1, 'no repite en la misma hora');
+      now = atToday(22, 10); env.api.fosNudge(); eq(env.telegram.length, 2); has(env.telegram[1], 'vuelve a 0');
+      now = atToday(23, 10); env.api.fosNudge(); eq(env.telegram.length, 2, 'silencio de noche');
+    }],
+    ['fosNudge: si ya cuadraste, felicita una sola vez al día', (make) => {
+      let now = atToday(12);
+      const env = make(() => now);
+      cuadrar(env);
+      const n0 = env.telegram.length; // el sync de Yape avisa por su cuenta
+      now = atToday(13, 5); env.api.fosNudge(); eq(env.telegram.length, n0 + 1); has(env.telegram[n0], 'Racha de 1 día');
+      now = atToday(16, 5); env.api.fosNudge(); eq(env.telegram.length, n0 + 1, 'no vuelve a escribir');
+    }],
+    ['fosNudge: avisa si no abres la app ni registras nada a mano hace días', (make) => {
+      let now = atToday(10, 1, -5);
+      const env = make(() => now);
+      env.call('ping'); // usaste la app hace 5 días
+      now = atToday(13, 1); env.api.fosNudge();
+      has(env.telegram[0], 'Llevas <b>5 días</b> sin abrir'); has(env.telegram[0], 'no registras nada a mano');
+    }],
   ];
+  // deja el cuadre de hoy hecho: categoriza todo, resuelve el duplicado y sincroniza Yape
+  function cuadrar(env) {
+    const inb = ok(env.call('getInbox'));
+    ok(env.call('resolveDuplicado', { accion: 'descartar', a: inb.duplicados[0].yape.id, b: inb.duplicados[0].banco.id }));
+    ok(env.call('categorizeBatch', { hoja: 'debito', items: inb.items.map((x) => ({ id: x.id, categoria: x.monto > 0 ? 'Sueldo' : 'Supermercado' })) }));
+    ok(env.call('categorizeBatch', { hoja: 'credito', items: ok(env.call('getCreditInbox')).items.map((x) => ({ id: x.id, categoria: 'Supermercado' })) }));
+    ok(env.call('syncYape'));
+  }
+  const fecha10 = (d) => root.GasMock.formatDate(d, '', 'yyyy-MM-dd');
+  const fosDay = (ymd, n) => fecha10(new Date(root.GasMock.L(+ymd.slice(0, 4), +ymd.slice(5, 7), +ymd.slice(8, 10), 12).getTime() + n * 86400000));
+  // tu ETL y tu sync de Yape, simulados (solo para las pruebas con reloj)
+  const STUBS = `
+function ejecutarETLCompleto() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheetByName('Debito').appendRow([new Date(), 'Egreso', 'BCP', 'Consumo RPA', '', -9, 'BCP_DEB_RPA', '']);
+  ss.getSheetByName('Crédito').appendRow([new Date(), 'FAL_RPA', 'Egreso', 'Pendiente', 'IO', 'Tottus', -20, '', 'Directo', '', '', '']);
+}
+function procesarYapeDefinitivo() {}
+`;
 
   /* ---------- diferencial: mismas operaciones contra el código anterior y el nuevo ---------- */
   const READS = [['getInbox'], ['getCreditInbox'], ['getPendingEstado'], ['getCategories'], ['getCategoryAdmin'], ['getCards'], ['getCalendar'], ['getSummary'],
@@ -375,5 +458,5 @@
   const sorted = (o) => Object.keys(o).sort().map((k) => [k, o[k]]); // el orden en que se aplicaron los formatos no importa
   const dumpSheets = (env) => JSON.stringify(Object.keys(env.sheets).sort().map((n) => [n, env.sheets[n].data, sorted(env.sheets[n].formulas), sorted(env.sheets[n].formats)]));
 
-  root.FosServerTests = { FILES, fixture, NEW, REG, TG, READS, WRITES, normalize, dumpSheets };
+  root.FosServerTests = { FILES, fixture, NEW, REG, TG, STUBS, READS, WRITES, normalize, dumpSheets };
 })(typeof window !== 'undefined' ? window : globalThis);

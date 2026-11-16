@@ -130,7 +130,7 @@
     const G = {
       SpreadsheetApp: { getActiveSpreadsheet: () => ss, openById: () => ss, flush: () => {} },
       PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
-      CacheService: { getScriptCache: () => ({ get: (k) => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = v; } }) },
+      CacheService: { getScriptCache: () => ({ get: (k) => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; } }) },
       LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
       Utilities: {
         DigestAlgorithm: { SHA_256: 'SHA_256', MD5: 'MD5' }, Charset: { UTF_8: 'UTF_8' },
@@ -158,7 +158,7 @@
       G.Date = FakeDate;
     }
     const names = Object.keys(G);
-    const exportsList = ['doPost', 'doGet', 'FOS_CFG', 'fosFindDuplicates_', 'fosReadTable_', 'fosTz_', 'fosWatch', 'fosNightly', 'fosNotifyCards', 'fosNotifyPending', 'fosInstallTriggers'];
+    const exportsList = ['doPost', 'doGet', 'FOS_CFG', 'fosFindDuplicates_', 'fosReadTable_', 'fosTz_', 'fosWatch', 'fosNightly', 'fosNotifyCards', 'fosNotifyPending', 'fosInstallTriggers', 'fosNudge', 'fosEtlProgramado'];
     // eslint-disable-next-line no-new-func
     const factory = new Function(...names, source + '\n;return {' + exportsList.map((n) => `${n}: typeof ${n} !== 'undefined' ? ${n} : undefined`).join(',') + '};');
     const api = factory(...names.map((n) => G[n]));

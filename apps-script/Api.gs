@@ -64,6 +64,7 @@ function fosHandle_(req, allowWrite) {
     return fosJson_({ ok: false, error: 'UNAUTHORIZED' });
   }
   // 2) Ruteo.
+  fosTouchSeen_(); // «usaste la app hoy» (racha y avisos de Telegram)
   const route = fosRoute_(String(req.action || ''));
   if (!route || (route.write && !allowWrite)) {
     return fosJson_({ ok: false, error: 'BAD_ACTION' });
@@ -71,7 +72,8 @@ function fosHandle_(req, allowWrite) {
   // 3) Ejecución (las escrituras van serializadas con LockService).
   try {
     const payload = req.payload && typeof req.payload === 'object' ? req.payload : {};
-    const data = route.write ? fosWithLock_(() => route.fn(payload)) : route.fn(payload);
+    // lock:false = la ruta se protege sola (el RPA dura minutos: no puede retener el lock de las demás escrituras)
+    const data = route.write && route.lock !== false ? fosWithLock_(() => route.fn(payload)) : route.fn(payload);
     return fosJson_({ ok: true, data: data });
   } catch (err) {
     if (err instanceof FosError) {
@@ -111,6 +113,8 @@ function fosRoute_(action) {
     case 'categorizeBatch': return { write: true, fn: fosCategorizeBatch_ };
     case 'resolveDuplicado': return { write: true, fn: fosResolveDuplicado_ };
     case 'syncYape':      return { write: true,  fn: fosSyncYape_ };
+    case 'runEtl':        return { write: true,  lock: false, fn: fosRunEtl_ };
+    case 'getRacha':      return { write: false, fn: fosGetRacha_ };
     default:              return null;
   }
 }
@@ -590,6 +594,38 @@ function fosSyncYape_() {
   procesarYapeDefinitivo();
   SpreadsheetApp.flush();
   const added = Math.max(0, sh.getLastRow() - before);
+  PropertiesService.getScriptProperties().setProperty('FOS_YAPE_SYNC', String(Date.now())); // cuenta para el cuadre del día
   FosTelegram.send('📲 <b>Sync Yape</b>: ' + added + ' movimiento(s) nuevo(s).');
   return { added: added };
+}
+
+/**
+ * Ejecuta tu RPA (ejecutarETLCompleto) a pedido desde la app: lee Gmail y agrega lo nuevo a Debito/Crédito.
+ * No usa fosWithLock_: dura minutos y bloquearía las demás escrituras (las filas del ETL entran con appendRow igual que siempre).
+ * Una bandera en caché evita dos corridas a la vez desde la app (doble clic, PC y celular). Si quieres que tampoco choque con
+ * la corrida programada de cada hora, apunta ese trigger a fosEtlProgramado() (misma bandera).
+ */
+function fosRunEtl_() {
+  if (typeof ejecutarETLCompleto !== 'function') {
+    throw new FosError('NOT_AVAILABLE', 'No existe ejecutarETLCompleto() en este proyecto.');
+  }
+  const deb = fosSheet_(FOS_CFG.SHEETS.DEBITO), cred = fosSheet_(FOS_CFG.SHEETS.CREDITO);
+  const d0 = deb.getLastRow(), c0 = cred.getLastRow(), t0 = Date.now();
+  fosEtlGuard_(function () { ejecutarETLCompleto(); SpreadsheetApp.flush(); });
+  const out = { debito: Math.max(0, deb.getLastRow() - d0), credito: Math.max(0, cred.getLastRow() - c0), segundos: Math.round((Date.now() - t0) / 1000) };
+  PropertiesService.getScriptProperties().setProperty('FOS_ETL_LAST', String(Date.now()));
+  return out;
+}
+
+/** Corre fn con la bandera «RPA en curso» (caché, 6 min máx.). Si ya hay una corrida: ETL_RUNNING. */
+function fosEtlGuard_(fn) {
+  const cache = CacheService.getScriptCache();
+  if (cache.get('fos_etl_run')) throw new FosError('ETL_RUNNING', 'El RPA ya se está ejecutando. Espera a que termine.');
+  cache.put('fos_etl_run', '1', 360);
+  try { return fn(); } finally { cache.remove('fos_etl_run'); }
+}
+
+/** Opcional: usa esta función en tu trigger horario del ETL en vez de ejecutarETLCompleto, así nunca corre a la vez que el botón. */
+function fosEtlProgramado() {
+  try { fosEtlGuard_(function () { ejecutarETLCompleto(); }); } catch (e) { if (!(e instanceof FosError)) throw e; } // si el botón ya lo está corriendo, esta hora se salta
 }

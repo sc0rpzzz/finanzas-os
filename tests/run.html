@@ -40,8 +40,8 @@
     const NEW_SRC = await source(params.get('src') || '../apps-script/');
     run(NEW_SRC, T.NEW, section('Comportamiento nuevo'));
     run(NEW_SRC, T.REG, section('Lo que ya funcionaba'));
-    const ulTg = section('Avisos de Telegram (reloj simulado)');
-    const make = (now) => GasMock.load(NEW_SRC, { sheets: T.fixture(), now, props: { TELEGRAM_BOT_TOKEN: 'test', TELEGRAM_CHAT_ID: '1' } });
+    const ulTg = section('Avisos de Telegram, racha y RPA (reloj simulado)');
+    const make = (now) => GasMock.load(NEW_SRC + '\n;\n' + T.STUBS, { sheets: T.fixture(), now, props: { TELEGRAM_BOT_TOKEN: 'test', TELEGRAM_CHAT_ID: '1' } });
     T.TG.forEach(([name, fn]) => { let e = null; try { fn(make); } catch (x) { e = x; } line(ulTg, name, e); });
     const orig = params.get('orig');
     if (orig) {
