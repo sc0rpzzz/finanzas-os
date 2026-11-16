@@ -5,7 +5,7 @@
   'use strict';
   const T = window.FosServerTests;
   const src = T.FILES.map((f) => { const x = new XMLHttpRequest(); x.open('GET', '/apps-script/' + f, false); x.send(); return x.responseText; }).join('\n;\n');
-  const env = window.GasMock.load(src, { sheets: T.fixture() });
+  const env = window.GasMock.load(src + '\n;\n' + T.STUBS, { sheets: T.fixture() }); // + tu ETL y sync de Yape simulados
   window.__mockEnv = env;
   const URL = 'https://script.google.com/macros/s/MOCK_TEST_DEPLOYMENT/exec';
   try { localStorage.setItem('fos.url', URL); localStorage.setItem('fos.token', env.props.API_TOKEN); } catch (e) { /* sin storage */ }

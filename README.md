@@ -35,6 +35,8 @@ Las altas usan `appendRow` fila por fila (igual que el ETL), así una fila de la
   (se revisan los últimos 45 días). Nunca se borra la fila: se marca `Duplicado` o se descarta la alerta.
 - El **abono manual** a una tarjeta está desactivado: los pagos llegan por el ETL o se registran como «Pago de tarjeta» desde Débito.
 - Cuotas: la 1.ª cae el mes siguiente a la compra.
+- Inbox: Restante débito · Total crédito (por pagar sin préstamos + cuotas del mes) · Total préstamos (aparte) · Liquidez real = restante débito − total crédito.
+- Cuadre del día (racha): Inbox sin nada por categorizar ni duplicados + abriste la app + sincronizaste Yape. Vive en Propiedades del script (`FOS_RACHA`, `FOS_LAST_SEEN`, `FOS_YAPE_SYNC`).
 - Resumen Débito: `cierre = sobró del mes anterior + ingresos − gastos − pagos de tarjeta`; el cierre pasa como «sobró» al mes siguiente.
 
 ## 1. Backend (Apps Script)
@@ -55,9 +57,10 @@ Recomendado: envuelve los triggers del ETL con `fosWithLock_(() => { ... })` (en
 |---|---|---|
 | `fosWatch` | cada hora (silencio 23:00–7:00, se acumula para las 7) | movimientos nuevos del ETL en Débito y Crédito (no repite lo que cargas tú con ID `MAN_`), gastos ≥ S/ 150 con 🚨, utilización de la tarjeta tocada, posibles duplicados Yape↔BCP |
 | `fosNotifyCards` | ~8 am | por tarjeta: estado cerrado por vencer o atrasado, corte en ≤ 3 días, cuotas del mes cerca del día de pago, utilización sobre la meta; el día 1, cierre del mes anterior |
-| `fosNightly` | ~9 pm | liquidez real (los 3 números del Inbox), lo de hoy, pendientes del Inbox, recordatorio de Yape y de cada tarjeta manual (IO, Interbank) con su disponible; los domingos, la semana vs la anterior |
+| `fosNudge` | cada hora (solo escribe a las 10, 13, 16, 19 y 22 h) | cuadre del día «estilo Duolingo»: si sigue pendiente te insiste con un checklist (categorizar, duplicados, abrir la app, sincronizar Yape), tono cada vez más fuerte y racha en riesgo; avisa si llevas días sin abrir la app o sin registrar nada a mano; si ya cuadraste, te felicita una vez |
+| `fosNightly` | ~9 pm | liquidez real (restante débito − total crédito; préstamos aparte), lo de hoy, cuadre del día y racha, recordatorio de Yape y de cada tarjeta manual (IO, Interbank) con su disponible; los domingos, la semana vs la anterior |
 
-Horas, monto de «gasto grande» y tarjetas manuales: constante `FOS_TG` en `Telegram.gs` (luego vuelve a correr `fosInstallTriggers()` si cambias las horas).
+Horas, monto de «gasto grande», tarjetas manuales, horas de insistencia (`NUDGE_HOURS`) y si Yape cuenta para el cuadre (`RACHA_YAPE`): constante `FOS_TG` en `Telegram.gs` (luego vuelve a correr `fosInstallTriggers()` si cambias las horas).
 Opcional: llama `fosWatch()` al final de tu `ejecutarETLCompleto` para que el aviso llegue apenas entra el movimiento.
 
 ## 2. Frontend (GitHub Pages)
@@ -95,3 +98,5 @@ Respuesta: `{"ok":true,"data":...}` o `{"ok":false,"error":"CODIGO","message":"�
 | toggleCuota | `{id, mes:"yyyy-MM", pagada}` | marca/desmarca una cuota en `Pagos Cuotas` |
 | getSummary | `{mes?:"yyyy-MM"}` | resumen mensual `debito` y `credito` por separado + `cuadre` de pagos de tarjeta |
 | syncYape | – | ejecuta `procesarYapeDefinitivo()` |
+| runEtl | – | ejecuta tu RPA `ejecutarETLCompleto()` (sin el lock de la API; bandera anti doble corrida → `ETL_RUNNING`); `{debito, credito, segundos}` filas nuevas |
+| getRacha | – | cuadre del día (`items`: inbox, duplicados, app, yape) y racha de días seguidos (`racha`, `best`) |

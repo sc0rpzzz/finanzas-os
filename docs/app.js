@@ -19,7 +19,7 @@
   const cacheGet = (key) => { try { const j = JSON.parse(localStorage.getItem(CACHE_PREFIX + key)); return j && j.v !== undefined ? j.v : null; } catch { return null; } };
   const cacheSet = (key, v) => { try { const s = JSON.stringify({ t: Date.now(), v }); if (s.length < 1500000) localStorage.setItem(CACHE_PREFIX + key, s); } catch { /* sin espacio: no pasa nada */ } };
   const cacheClear = () => { try { Object.keys(localStorage).filter((k) => k.startsWith(CACHE_PREFIX)).forEach((k) => localStorage.removeItem(k)); } catch { /* nada */ } };
-  const WRITE_ACTIONS = new Set(['updateMovimiento', 'addMovimientos', 'categorizeBatch', 'resolveDuplicado', 'categorize', 'setPagado', 'toggleCuota', 'setEstado', 'addManual', 'addCreditConsumo', 'addPagoTarjeta', 'syncYape', 'saveCategory']);
+  const WRITE_ACTIONS = new Set(['updateMovimiento', 'addMovimientos', 'categorizeBatch', 'resolveDuplicado', 'categorize', 'setPagado', 'toggleCuota', 'setEstado', 'addManual', 'addCreditConsumo', 'addPagoTarjeta', 'syncYape', 'saveCategory', 'runEtl']);
   let cacheGen = 0; // sube con cada escritura: una precarga que empezó antes no puede guardar datos viejos
   let inflight = 0;
   const busy = (d) => { inflight = Math.max(0, inflight + d); const el = document.getElementById('busy'); if (el) el.classList.toggle('hidden', inflight === 0); };
@@ -50,6 +50,7 @@
     table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16"/>',
     tag: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r=".5"/>',
     chart: '<path d="M3 3v18h18"/><path d="M7 15v3M12 9v9M17 5v13"/>',
+    zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
     sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/><path d="M15 10l-2 2 2 2"/>',
   };
   function icon(name) {
@@ -116,6 +117,13 @@
       ? h('span', { class: 'inline-flex max-w-full items-center gap-1 truncate rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-200', title: `Categoría ${cat}` }, catLabel(cat))
       : h('span', { class: 'inline-flex items-center rounded-full border border-dashed border-white/15 px-2 py-0.5 text-[11px] text-slate-500', title: 'Sin categoría' }, 'Sin categoría');
   }
+  function estadoChip(estado) { // Estado de un movimiento de Crédito: Procesado (ya lo registró el banco) o Pendiente
+    const k = normKey(estado);
+    if (k !== 'procesado' && k !== 'pendiente') return null;
+    const on = k === 'procesado';
+    return h('span', { class: 'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ' + (on ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-200'), title: `Estado: ${on ? 'Procesado' : 'Pendiente'}` },
+      on ? '✓ Procesado' : '⏳ Pendiente');
+  }
   const tagRow = (...kids) => h('div', { class: 'mt-1 flex min-w-0 flex-wrap items-center gap-1.5' }, kids);
 
   function doneState(msg) { // estado vacío «todo al día»
@@ -149,6 +157,7 @@
     BUSY: 'El servidor está ocupado, reintenta en unos segundos.',
     NOT_FOUND: 'Ese movimiento ya no existe en la hoja.',
     NOT_AVAILABLE: 'Función no disponible en el backend.',
+    ETL_RUNNING: 'El RPA ya se está ejecutando. Espera a que termine.',
     INTERNAL: 'Error interno del backend (revisa Telegram / Ejecuciones).',
   };
   const errText = (e) => ERR_TEXT[e.code] || e.message || 'Error desconocido.';
@@ -294,7 +303,7 @@
   function loading(text = 'Cargando…') { // esqueleto con brillo mientras llegan los datos
     return h('div', { class: 'space-y-3', role: 'status', 'aria-label': text },
       h('div', { class: 'skel h-9 w-56' }),
-      h('div', { class: 'grid grid-cols-2 gap-3 sm:grid-cols-3' }, [0, 1, 2].map((i) => h('div', { class: 'skel h-20' + (i === 2 ? ' hidden sm:block' : '') }))),
+      h('div', { class: 'grid grid-cols-2 gap-3 lg:grid-cols-4' }, [0, 1, 2, 3].map((i) => h('div', { class: 'skel h-20' + (i >= 2 ? ' hidden lg:block' : '') }))),
       [0, 1, 2, 3].map(() => h('div', { class: 'skel h-16' })),
       h('p', { class: 'pt-1 text-center text-xs text-slate-500' }, text));
   }
@@ -307,7 +316,7 @@
   const inbox = { kind: 'debito', phase: 1, data: null };
   const KINDS = [['debito', 'Débito'], ['credito', 'Crédito']];
 
-  const INBOX_CALLS = ['getInbox', 'getCreditInbox', 'getCards', 'getCalendar', 'getPendingEstado', 'getSummary'];
+  const INBOX_CALLS = ['getInbox', 'getCreditInbox', 'getCards', 'getCalendar', 'getPendingEstado', 'getSummary', 'getRacha'];
   // Una sola petición para todo el Inbox. Si el backend aún no tiene `batch`, cae a llamadas sueltas.
   async function fetchInboxRaw() {
     try {
@@ -319,13 +328,14 @@
     }
   }
   function shapeInbox(results) {
-    const [d, c, cards, cal, pend, sum] = results;
+    const [d, c, cards, cal, pend, sum, racha] = results;
     const ok = (r) => (r.ok ? r.data : null), err = (r) => (r.ok ? null : new ApiError(r.error, r.message));
     if (!d.ok) throw new ApiError(d.error, d.message);
     return {
       sum: sum && sum.ok ? sum.data : null, // resumen del mes actual: su «cierre» es el neto actual de Débito
       debito: d.data, credito: ok(c), creditoError: err(c), cards: ok(cards), cardsError: err(cards),
       cal: ok(cal), calError: err(cal), pend: ok(pend), pendError: err(pend),
+      racha: racha && racha.ok ? racha.data : null, // backend anterior sin getRacha: simplemente no se muestra
     };
   }
   async function viewInbox(root, refetch = true) {
@@ -363,9 +373,11 @@
     if (!data.cards) return failure(data.cardsError || new ApiError('NOT_AVAILABLE'), () => viewInbox(root));
     const items = unpaidList(data).sort((a, b) => (a.vence || a.fecha || '').localeCompare(b.vence || b.fecha || ''));
     if (!items.length) return doneState('No hay consumos de crédito sin pagar.');
-    const total = items.reduce((s, p) => s + p.monto, 0);
+    const total = items.filter((p) => !isLoan(p)).reduce((s, p) => s + p.monto, 0);
+    const loans = items.filter(isLoan).reduce((s, p) => s + p.monto, 0);
     return h('div', {},
-      h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Consumos de tarjeta aún sin pagar · total ', h('b', { class: 'text-slate-200' }, fmtMoney(total)), ' · marca ✓ cuando ya los pagaste.'),
+      h('p', { class: 'mb-3 text-sm text-slate-400' }, 'Consumos de tarjeta aún sin pagar · total ', h('b', { class: 'text-slate-200' }, fmtMoney(total)),
+        loans > 0 ? [' · préstamos ', h('b', { class: 'text-amber-200' }, fmtMoney(r2(loans)))] : null, ' · marca ✓ cuando ya los pagaste.'),
       h('ul', { class: 'grid gap-2 lg:grid-cols-2 2xl:grid-cols-3' }, items.map((p) => {
         const box = h('input', { type: 'checkbox', class: 'h-5 w-5 shrink-0 accent-emerald-500', disabled: !p.id, 'aria-label': `Marcar como pagado: ${p.detalle}` });
         box.addEventListener('change', () => {
@@ -378,7 +390,7 @@
         return h('li', { class: 'card card-hover flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm' }, box,
           h('div', { class: 'min-w-0 flex-1' },
             h('p', { class: 'truncate font-medium' }, p.detalle),
-            tagRow(cardChip(p.tarjeta), p.tipo === 'Préstamo' ? null : catChip(p.categoria)),
+            tagRow(cardChip(p.tarjeta), estadoChip(p.estado), p.tipo === 'Préstamo' ? null : catChip(p.categoria)),
             h('p', { class: 'mt-1 truncate text-xs text-slate-500' }, `${fmtD(p.fecha)} · ${p.tipo}${p.vence ? ` · vence ${fmtD(p.vence)}` : ''}`)),
           h('span', { class: 'tabular-nums' }, fmtMoney(p.monto)));
       })));
@@ -438,10 +450,15 @@
       })));
   }
 
-  /* Indicadores del Inbox: Débito y Crédito se muestran por separado; la liquidez real es solo su diferencia (no se suman). */
+  /* Indicadores del Inbox: Débito y Crédito se muestran por separado; la liquidez real es solo su diferencia (no se suman).
+     Los préstamos (Tipo «Prestamo» en Crédito) van en su propio cuadro: no entran en el total de crédito ni en la liquidez. */
+  const isLoan = (p) => p.tipo === 'Préstamo';
   function liquidity(data) {
     const deb = data.sum && data.sum.debito ? data.sum.debito.cierre : null;                 // neto actual de todas las cuentas de Débito
-    const porPagar = data.cards ? r2(unpaidList(data).reduce((s, p) => s + p.monto, 0)) : null; // fase 2: créditos por pagar
+    const unpaid = data.cards ? unpaidList(data) : null;
+    const porPagar = unpaid ? r2(unpaid.filter((p) => !isLoan(p)).reduce((s, p) => s + p.monto, 0)) : null; // fase 2 sin préstamos
+    const loans = unpaid ? unpaid.filter(isLoan) : null;
+    const prestamos = loans ? r2(loans.reduce((s, p) => s + p.monto, 0)) : null;
     const cuotas = data.cal ? r2(dueFees(data).reduce((s, r) => s + Math.abs(r.montos[0]), 0)) : null; // fase 3: cuotas del mes sin pagar (vienen con signo de consumo)
     const cred = porPagar == null || cuotas == null ? null : r2(porPagar + cuotas);
     const liq = deb == null || cred == null ? null : r2(deb - cred);
@@ -449,10 +466,31 @@
       h('p', { class: 'text-xs font-medium text-slate-400' }, label),
       h('p', { class: 'mt-1 text-xl font-semibold tabular-nums tracking-tight sm:text-2xl ' + tone }, countMoney(v, `inbox:${label}`)),
       h('p', { class: 'mt-0.5 truncate text-[11px] text-slate-500' }, note));
-    return h('div', { class: 'mb-4 grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3', role: 'group', 'aria-label': 'Liquidez' },
+    return h('div', { class: 'mb-4 grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4', role: 'group', 'aria-label': 'Liquidez' },
       tile('Restante débito', deb, deb == null ? 'sin datos del resumen' : 'neto actual de tus cuentas', 'text-slate-50'),
       tile('Total crédito', cred, cred == null ? 'sin datos de tarjetas' : `por pagar ${fmtMoney(porPagar)} + cuotas ${fmtMoney(cuotas)}`, 'text-rose-300'),
-      tile('Liquidez real', liq, 'restante débito − total crédito', liq == null ? 'text-slate-50' : liq < 0 ? 'text-rose-300' : 'text-emerald-300', 'liq-tile col-span-2 md:col-span-1'));
+      tile('Total préstamos', prestamos, prestamos == null ? 'sin datos de tarjetas' : loans.length ? `${loans.length} en tus tarjetas · no resta` : 'ninguno pendiente', 'text-amber-200'),
+      tile('Liquidez real', liq, 'restante débito − total crédito', liq == null ? 'text-slate-50' : liq < 0 ? 'text-rose-300' : 'text-emerald-300', 'liq-tile'));
+  }
+
+  /* Cuadre del día (lo evalúa el servidor): racha de días seguidos con el Inbox al día, la app abierta y Yape sincronizado. */
+  const RACHA_LABEL = { inbox: 'Categorizar', duplicados: 'Duplicados', app: 'Abrir la app', yape: 'Sincronizar Yape' };
+  function rachaBar(data) {
+    const r = data.racha;
+    if (!r) return null;
+    const fire = r.racha > 0;
+    const msg = r.cuadrado ? (r.racha >= r.best && r.racha > 1 ? '¡Récord! Hoy ya cuadraste.' : 'Hoy ya cuadraste. Mañana, otra vez.')
+      : r.enRiesgo ? 'Tu racha está en riesgo: termina el cuadre de hoy.' : 'Cuadra hoy y empieza tu racha.';
+    const chip = (i) => h('span', { class: 'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] ' + (i.ok ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100') },
+      i.ok ? h('span', { 'aria-hidden': 'true' }, '✓') : h('span', { class: 'h-1.5 w-1.5 rounded-full bg-amber-300', 'aria-hidden': 'true' }),
+      h('span', { class: 'sr-only' }, i.ok ? 'Hecho: ' : 'Pendiente: '), RACHA_LABEL[i.key] || i.key, !i.ok && i.n ? ` (${i.n})` : null);
+    return h('div', { class: 'card mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border p-3 ' + (r.cuadrado ? 'border-emerald-400/25 bg-emerald-500/[.06]' : 'border-amber-400/25 bg-amber-500/[.05]'), role: 'status', 'aria-label': 'Cuadre del día' },
+      h('div', { class: 'flex items-center gap-2.5' },
+        h('span', { class: 'text-2xl leading-none ' + (fire ? '' : 'opacity-40 grayscale'), 'aria-hidden': 'true' }, '🔥'),
+        h('div', { class: 'leading-tight' },
+          h('p', { class: 'text-sm font-semibold text-slate-50' }, `${r.racha} día${r.racha === 1 ? '' : 's'} de racha`),
+          h('p', { class: 'text-[11px] text-slate-400' }, msg + (r.best > r.racha ? ` · récord ${r.best}` : '')))),
+      h('div', { class: 'flex w-full flex-wrap items-center gap-1.5 sm:w-auto sm:flex-1 sm:justify-end' }, (r.items || []).map(chip)));
   }
   // en el celular; en PC el «Actualizar» va en el encabezado de la sección
   const refreshBar = (root) => h('div', { class: 'mb-3 flex justify-end md:hidden' }, h('button', { class: BTN_GHOST + ' !px-3 !py-1.5', onclick: () => viewInbox(root) }, 'Actualizar'));
@@ -460,9 +498,9 @@
   function renderInbox(root) {
     const data = inbox.data;
     if (inbox.phase !== 1) {
-      root.replaceChildren(
-        liquidity(data), refreshBar(root),
-        phaseBar(root), inbox.phase === 2 ? phasePay(root) : inbox.phase === 3 ? phaseFees(root) : phaseProcess(root));
+      root.replaceChildren(...[ // filter(Boolean): replaceChildren nativo pintaría «false»
+        liquidity(data), rachaBar(data), refreshBar(root),
+        phaseBar(root), inbox.phase === 2 ? phasePay(root) : inbox.phase === 3 ? phaseFees(root) : phaseProcess(root)].filter(Boolean));
       return;
     }
     const counts = {};
@@ -503,7 +541,7 @@
     }
 
     root.replaceChildren(...[
-      liquidity(data), refreshBar(root), phaseBar(root, badge1),
+      liquidity(data), rachaBar(data), refreshBar(root), phaseBar(root, badge1),
       h('div', { class: 'mb-3 flex' },
         h('div', { class: 'grid grid-cols-2 gap-1 rounded-xl bg-slate-900 p-1', role: 'tablist' }, KINDS.map(tab))),
       body, bar.el].filter(Boolean));
@@ -1490,6 +1528,28 @@
       h('p', { class: 'mt-2 text-xs text-slate-600' }, 'Débito y Crédito son visiones independientes: no se suman.'));
   }
 
+  /* ---------- ejecutar el RPA (ejecutarETLCompleto: lee tus correos y trae lo nuevo de BCP, Falabella…) ---------- */
+  let rpaRunning = false;
+  async function runEtl() {
+    if (rpaRunning) return;
+    rpaRunning = true;
+    const btns = [...document.querySelectorAll('[data-act=rpa]')];
+    btns.forEach((b) => { b.disabled = true; b.setAttribute('aria-busy', 'true'); const sp = b.querySelector('span'); sp && sp.classList.add('rpa-pulse'); });
+    toast('RPA en marcha: revisando tus correos… (puede tardar unos minutos)');
+    try {
+      const r = await api('runEtl', {}, { timeoutMs: 380000 }); // Apps Script corta a los 6 min
+      const n = (r.debito || 0) + (r.credito || 0);
+      toast(n ? `RPA listo: ${n} movimiento(s) nuevo(s) · débito ${r.debito} · crédito ${r.credito}` : 'RPA listo: sin movimientos nuevos');
+      const v = currentView();
+      if (v === 'inbox') viewInbox($('#view')); else if (v === 'movimientos') viewHistory($('#view'), true);
+    } catch (e) {
+      toast(errText(e), 'err');
+    } finally {
+      rpaRunning = false;
+      btns.forEach((b) => { b.disabled = false; b.removeAttribute('aria-busy'); const sp = b.querySelector('span'); sp && sp.classList.remove('rpa-pulse'); });
+    }
+  }
+
   /* ---------- sincronizar Yape ---------- */
   async function syncYape() {
     if (!confirm('¿Ya enviaste el correo de Yape desde la app?')) return;
@@ -1505,83 +1565,6 @@
       btns.forEach((b) => { b.disabled = false; const sp = b.querySelector('span'); sp && sp.classList.remove('spin'); });
     }
   }
-
-  /* ---------- cuadre diario (solo PC): checklist de cuentas que se reinicia cada día ----------
-     Vive en este navegador (localStorage), no en el Excel. */
-  const daily = (() => {
-    const K = { accounts: 'fos.cuentas', done: 'fos.daily' };
-    const FALLBACK = ['BCP', 'Interbank', 'Efectivo', 'Yape'];
-    const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-    const readJson = (k, def) => { try { const v = JSON.parse(ls.get(k)); return v == null ? def : v; } catch { return def; } };
-    let accounts = readJson(K.accounts, null);
-    let done = readJson(K.done, { date: today(), items: [] });
-    let editing = false, open = false, fetched = false;
-    const save = () => { ls.set(K.accounts, JSON.stringify(accounts || [])); ls.set(K.done, JSON.stringify(done)); };
-    const rollover = () => { if (done.date !== today()) { done = { date: today(), items: [] }; save(); } };
-
-    const fab = h('button', { type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', title: 'Cuadre diario',
-      // vive en el pie del menú lateral (PC), encima de «Sincronizar Yape»
-      class: 'daily-fab hidden w-full items-center gap-2 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2.5 text-sm font-medium text-slate-100 transition hover:border-emerald-400/40 hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 md:flex' });
-    const panel = h('div', { role: 'dialog', 'aria-label': 'Cuadre diario', class: 'hidden' });
-    const PANEL = 'daily-panel glass glass-strong pop-in fixed z-40 w-80 rounded-2xl border border-white/10 p-4 shadow-2xl ';
-
-    const list = () => accounts || FALLBACK;
-    const pending = () => list().filter((a) => !done.items.includes(a)).length;
-
-    function draw() {
-      rollover();
-      const n = pending(), all = n === 0 && list().length > 0;
-      fab.replaceChildren(h('span', { class: all ? 'text-emerald-400' : 'text-amber-300', 'aria-hidden': 'true' }, all ? '✓' : '☐'), h('span', { class: 'nav-label flex-1 text-left' }, 'Cuadre diario'),
-        h('span', { class: 'rounded-full px-2 py-0.5 text-xs ' + (all ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300') },
-          all ? h('span', { class: 'nav-label' }, 'al día') : [String(n), h('span', { class: 'nav-label' }, ' pend.')]));
-      fab.title = all ? 'Cuadre diario: al día' : `Cuadre diario: ${n} pendiente(s)`;
-      fab.setAttribute('aria-expanded', open ? 'true' : 'false');
-      panel.className = open ? PANEL + 'hidden md:block' : 'hidden';
-      if (!open) return;
-      const d = new Date();
-      const items = list().map((a) => {
-        const box = h('input', { type: 'checkbox', class: 'h-5 w-5 accent-emerald-500', checked: done.items.includes(a), 'aria-label': `Cuenta cuadrada: ${a}` });
-        box.addEventListener('change', () => { done.items = box.checked ? [...new Set([...done.items, a])] : done.items.filter((x) => x !== a); save(); draw(); });
-        return h('li', { class: 'flex items-center gap-3 py-1.5 text-sm' },
-          h('label', { class: 'flex flex-1 cursor-pointer items-center gap-3 ' + (done.items.includes(a) ? 'text-slate-500 line-through' : 'text-slate-200') }, box, a),
-          editing && h('button', { type: 'button', class: 'rounded px-2 text-slate-500 hover:text-rose-300', 'aria-label': `Quitar ${a}`, onclick: () => { accounts = list().filter((x) => x !== a); save(); draw(); } }, '×'));
-      });
-      const add = h('input', { class: INPUT + ' !py-1.5', placeholder: 'Nueva cuenta…', maxlength: '30', 'aria-label': 'Nueva cuenta' });
-      const addForm = editing && h('form', { class: 'mt-2 flex gap-2', onsubmit: (e) => {
-        e.preventDefault(); const v = add.value.trim();
-        if (v && !list().includes(v)) { accounts = [...list(), v]; save(); draw(); }
-      } }, add, h('button', { class: BTN + ' !px-3 !py-1.5', type: 'submit' }, 'Añadir'));
-      panel.replaceChildren(...[ // filter(Boolean): replaceChildren nativo pintaría «false»
-        h('div', { class: 'mb-2 flex items-baseline justify-between' },
-          h('h2', { class: 'text-sm font-semibold' }, 'Cuadre de hoy'),
-          h('span', { class: 'text-xs text-slate-500' }, `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} · se reinicia cada día`)),
-        h('p', { class: 'mb-2 text-xs text-slate-400' }, 'Marca cada cuenta cuando ya creaste sus movimientos y el saldo cuadra.'),
-        h('ul', { class: 'divide-y divide-slate-800' }, items),
-        addForm,
-        h('div', { class: 'mt-3 flex justify-between text-xs' },
-          h('button', { type: 'button', class: 'text-slate-400 underline decoration-dotted hover:text-slate-200', onclick: () => { editing = !editing; draw(); } }, editing ? 'Listo' : 'Editar cuentas'),
-          h('button', { type: 'button', class: 'text-slate-400 underline decoration-dotted hover:text-slate-200', onclick: () => { done = { date: today(), items: [] }; save(); draw(); } }, 'Reiniciar hoy'))].filter(Boolean));
-    }
-
-    async function seedAccounts() { // primera vez: toma tus cuentas y tarjetas del Excel
-      if (accounts || fetched || !hasCreds()) return;
-      fetched = true;
-      try {
-        const r = await api('getCategories');
-        const names = [...new Set([...(r.cuentas || []), ...(r.tarjetas || [])])].filter(Boolean);
-        if (names.length && !accounts) { accounts = names; save(); draw(); }
-      } catch { /* se queda con la lista por defecto */ }
-    }
-    fab.addEventListener('click', () => { open = !open; if (open) seedAccounts(); draw(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open) { open = false; draw(); fab.focus(); } });
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) draw(); });
-    setInterval(draw, 60000); // si la app queda abierta pasada la medianoche, se reinicia sola
-    return {
-      mount() { const slot = $('#daily-slot'); if (slot) slot.append(fab); else document.body.append(fab); document.body.append(panel); draw(); },
-      sync() { fab.classList.toggle('md:flex', hasCreds()); if (!hasCreds()) { open = false; panel.className = 'hidden'; } else seedAccounts(); },
-    };
-  })();
-
 
   /* ---------- precarga: baja todas las pantallas por detrás para que al entrar ya estén listas ---------- */
   let warming = null, warmTimer = null;
@@ -1657,7 +1640,6 @@
   function route() {
     navTok++;
     drawerLayout(false);
-    daily.sync();
     if (!hasCreds()) { openSetup(); return; }
     const v = currentView();
     paintHead(v); animateEnter();
@@ -1697,9 +1679,10 @@
     initNav();
     // con el mouse, el enlace del menú no se queda con el anillo de foco (con teclado sí se mantiene)
     document.querySelectorAll('[data-nav]').forEach((a) => a.addEventListener('pointerup', () => a.blur()));
-    daily.mount();
     initSetup();
+    ['fos.daily', 'fos.cuentas'].forEach(ls.del); // restos del antiguo «Cuadre diario» (ahora lo lleva el servidor: racha)
     document.querySelectorAll('[data-act=yape]').forEach((b) => b.addEventListener('click', syncYape));
+    document.querySelectorAll('[data-act=rpa]').forEach((b) => b.addEventListener('click', runEtl));
     // «Actualizar» del encabezado (PC): misma posición en todas las secciones; vuelve a pedir los datos de la vista actual
     const refreshBtn = $('[data-act=refresh]');
     if (refreshBtn) refreshBtn.addEventListener('click', async () => {

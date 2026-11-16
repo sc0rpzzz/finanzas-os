@@ -86,15 +86,9 @@
       body.nav-collapsed #side-nav .nav-brand { flex-direction: column; gap: .75rem; padding-left: 0; padding-right: 0; }
       body.nav-collapsed #side-nav [data-act=yape] { padding-left: 0; padding-right: 0; }
       .nav-toggle svg { transition: transform .3s var(--ease); }
-      /* Cuadre diario en el pie del menú: el panel se abre a su derecha */
-      :root { --nav-w: 15rem; }
-      body.nav-collapsed { --nav-w: 4.75rem; }
-      .daily-panel { left: calc(var(--nav-w) + 12px); bottom: 16px; }
-      body.nav-collapsed #side-nav .daily-fab { justify-content: center; padding-left: 0; padding-right: 0; }
+      body.nav-collapsed #side-nav [data-act=rpa] { padding-left: 0; padding-right: 0; }
     }
     @media (min-width: 1280px) {
-      :root { --nav-w: 17rem; }
-      body.nav-collapsed { --nav-w: 4.75rem; }
       .fos [data-nav][aria-current=page]::before { left: -16px; }
       body.nav-collapsed .nav-toggle svg { transform: scaleX(-1); }
     }
@@ -129,6 +123,13 @@
     .done-badge { background: radial-gradient(circle, rgba(16, 185, 129, .28), rgba(16, 185, 129, .08)); box-shadow: 0 0 0 1px rgba(52, 211, 153, .3), 0 0 30px -6px var(--glow); animation: popIn .45s var(--ease) both; }
     .busy-bar { background: linear-gradient(90deg, transparent, #34d399, #22d3ee, transparent); background-size: 200% 100%; animation: busy 1.1s linear infinite; }
     .spin { animation: spin 1s linear infinite; }
+    /* botón del RPA mientras corre: el rayo late */
+    @keyframes rpa-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.85); } }
+    .rpa-pulse { animation: rpa-pulse 1.1s var(--ease) infinite; }
+    .fos .btn-rpa { border: 1px solid rgba(52, 211, 153, .35); background: rgba(16, 185, 129, .1); transition: transform .15s var(--ease), background .15s; }
+    .fos .btn-rpa:hover:not(:disabled) { background: rgba(16, 185, 129, .18); }
+    .fos .btn-rpa:active:not(:disabled) { transform: scale(.97); }
+    .fos .btn-rpa:disabled { opacity: .7; cursor: progress; }
     /* indicador de actividad: anillo pequeño y tenue en la esquina superior derecha */
     .busy-dot { position: fixed; z-index: 70; top: calc(env(safe-area-inset-top) + 3px); right: 3px; width: 10px; height: 10px; border-radius: 999px;
       border: 1.5px solid rgba(148, 163, 184, .18); border-top-color: rgba(52, 211, 153, .75); opacity: .7; pointer-events: none; animation: spin .8s linear infinite; }
@@ -177,10 +178,16 @@
           <h1 id="mobile-title" class="truncate text-base font-semibold tracking-tight text-white">Inbox</h1>
         </div>
       </div>
+      <div class="flex shrink-0 items-center gap-2">
+      <button data-act="rpa" type="button" title="Ejecutar el RPA: trae lo nuevo de tus correos (BCP, Falabella…)" aria-label="Ejecutar RPA"
+        class="btn-rpa inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium text-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300">
+        <span data-icon="zap"></span> RPA
+      </button>
       <button data-act="yape" type="button"
         class="btn-yape inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:opacity-50">
         <span data-icon="refresh"></span> Yape
       </button>
+      </div>
     </div>
   </header>
 
@@ -226,7 +233,10 @@
       <a href="#categorias" data-nav="categorias" title="Categorías" class="flex flex-col items-center gap-1 py-2 text-[11px] text-slate-400 sm:text-xs md:flex-row md:gap-3 md:rounded-xl md:px-3 md:py-2.5 md:text-sm md:hover:bg-white/5 xl:py-3 xl:text-[15px]"><span data-icon="tag"></span><span class="nav-label md:hidden">Categ.</span><span class="nav-label hidden md:inline">Categorías</span></a>
     </div>
     <div class="mt-auto hidden flex-col gap-2 border-t border-white/5 p-3 md:flex xl:p-4">
-      <div id="daily-slot"></div>
+      <button data-act="rpa" type="button" title="Ejecutar el RPA: trae lo nuevo de tus correos (BCP, Falabella…)"
+        class="btn-rpa inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300">
+        <span data-icon="zap"></span><span class="nav-label">Ejecutar RPA</span>
+      </button>
       <button data-act="yape" type="button" title="Sincronizar Yape"
         class="btn-yape inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:opacity-50">
         <span data-icon="refresh"></span><span class="nav-label">Sincronizar Yape</span>
@@ -264,6 +274,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=26" defer></script>
+  <script src="app.js?v=27" defer></script>
 </body>
 </html>

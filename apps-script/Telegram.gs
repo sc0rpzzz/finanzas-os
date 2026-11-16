@@ -57,6 +57,10 @@ const FOS_TG = Object.freeze({
   WINDOW_DAYS: 10,                    // movimientos recientes que se vigilan (el ETL puede traer fechas de días anteriores)
   MANUAL_CARDS: /(^|\s)io(\s|$)|interbank/, // tarjetas que cargas a mano (nombre normalizado)
   MAX_LINES: 25,
+  // Cuadre diario «estilo Duolingo»: fosNudge insiste a estas horas mientras el cuadre del día siga pendiente (escala el tono)
+  NUDGE_HOURS: [10, 13, 16, 19, 22],
+  RACHA_YAPE: true,                   // sincronizar Yape cuenta para el cuadre del día
+  MANUAL_STALE_DAYS: 2,               // días sin registrar nada a mano (efectivo, IO, Interbank) antes de preguntarte
 });
 
 function fosTgMoney_(n) {
@@ -176,19 +180,15 @@ function fosNightly() {
   try {
     const parts = [];
     const emojis = fosEmojiMap_();
-    // 1) liquidez real: los mismos 3 números del Inbox
-    const sum = fosGetSummary_({});
-    let cards = null;
-    try { cards = fosComputeCards_(); } catch (e) { if (!(e instanceof FosError)) throw e; }
-    const deb = sum.debito.cierre;
-    if (cards) {
-      const porPagar = fosR2_(cards.reduce(function (s, c) { return s + c.pendientes.reduce(function (a, p) { return a + p.monto; }, 0); }, 0));
-      const cuotas = fosR2_(cards.reduce(function (s, c) { return s + c.cuotaMes; }, 0));
-      const cred = fosR2_(porPagar + cuotas), liq = fosR2_(deb - cred);
-      parts.push((liq < 0 ? '🔴' : '💧') + ' <b>Liquidez real: ' + fosTgMoney_(liq) + '</b>\nRestante débito ' + fosTgMoney_(deb) +
-        ' − total crédito ' + fosTgMoney_(cred) + ' (por pagar ' + fosTgMoney_(porPagar) + ' + cuotas del mes ' + fosTgMoney_(cuotas) + ')');
+    // 1) liquidez real: los mismos números del Inbox (los préstamos van aparte y no restan)
+    const L = fosLiquidez_();
+    if (L.credito !== null) {
+      parts.push((L.liquidez < 0 ? '🔴' : '💧') + ' <b>Liquidez real: ' + fosTgMoney_(L.liquidez) + '</b>\n' +
+        'Restante débito ' + fosTgMoney_(L.debito) + '\n' +
+        'Total crédito ' + fosTgMoney_(L.credito) + ' (por pagar ' + fosTgMoney_(L.porPagar) + ' + cuotas del mes ' + fosTgMoney_(L.cuotas) + ')' +
+        (L.prestamos > 0 ? '\nPréstamos ' + fosTgMoney_(L.prestamos) + ' (aparte: no restan)' : ''));
     } else {
-      parts.push('💧 <b>Restante débito: ' + fosTgMoney_(deb) + '</b>');
+      parts.push('💧 <b>Restante débito: ' + fosTgMoney_(L.debito) + '</b>');
     }
 
     // 2) lo de hoy (Débito y Crédito por separado)
@@ -211,14 +211,13 @@ function fosNightly() {
     if (top.length) hoyLines.push('Lo más grande: ' + top.map(function (x) { return FosTelegram.esc(x.detalle) + ' ' + fosTgMoney_(Math.abs(x.monto)); }).join(' · '));
     parts.push(hoyLines.join('\n'));
 
-    // 3) pendientes del Inbox
-    const inb = fosGetInbox_(), cin = fosGetCreditInbox_(), pend = fosGetPendingEstado_();
-    const nD = inb.items.length, nC = cin.items.length, nP = pend.items.length, nDup = inb.duplicados.length;
-    parts.push(nD + nC + nP + nDup === 0 ? '✅ <b>Inbox al día</b>' : '📥 <b>Por revisar</b>: ' + [
-      nD + nC ? (nD + nC) + ' sin categoría (débito ' + nD + ' · crédito ' + nC + ')' : null,
-      nP ? nP + ' por procesar' : null,
-      nDup ? nDup + ' posible(s) duplicado(s)' : null,
-    ].filter(Boolean).join(' · '));
+    // 3) cuadre del día y racha
+    const R = fosRachaEval_(now);
+    parts.push(R.cuadrado
+      ? '✅ <b>Cuadre de hoy hecho</b> · 🔥 racha de ' + R.racha + ' día' + (R.racha === 1 ? '' : 's') + (R.racha >= R.best && R.racha > 1 ? ' (tu récord)' : '')
+      : '📥 <b>Cuadre de hoy pendiente</b>' + (R.racha > 0 ? ' · 🔥 racha de ' + R.racha + ' día' + (R.racha === 1 ? '' : 's') + ' en riesgo' : '') + '\n' + fosRachaLines_(R, tz).join('\n'));
+    const pend = fosGetPendingEstado_().items.length;
+    if (pend) parts.push('⏳ ' + pend + ' movimiento(s) de tarjeta siguen «Pendiente» (márcalos cuando el banco los procese).');
 
     // 4) recordatorios diarios: Yape y tarjetas que cargas a mano
     const reminders = ['📝 <b>Recordatorios</b>'];
@@ -310,6 +309,176 @@ function fosEtlDone(fuente, nuevos, errores) {
     nuevos + ' nuevo(s)' + (errores ? ', ' + errores + ' error(es)' : '') + '.');
 }
 
+
+/* ------------------- Liquidez real (la misma cuenta del Inbox) ------------------- */
+
+/**
+ * restante débito (cierre del mes) − total crédito (consumos directos por pagar + cuotas del mes sin pagar).
+ * Los préstamos (Tipo «Prestamo») se informan aparte y NO restan. credito = null si falta la hoja Tarjetas.
+ */
+function fosLiquidez_() {
+  const deb = fosGetSummary_({}).debito.cierre;
+  let cards = null;
+  try { cards = fosComputeCards_(); } catch (e) { if (!(e instanceof FosError)) throw e; }
+  if (!cards) return { debito: deb, porPagar: null, cuotas: null, credito: null, prestamos: null, liquidez: null };
+  let porPagar = 0, prestamos = 0, cuotas = 0;
+  cards.forEach(function (c) {
+    c.pendientes.forEach(function (p) { if (p.tipo === 'Préstamo') prestamos += p.monto; else porPagar += p.monto; });
+    cuotas += c.cuotaMes;
+  });
+  const credito = fosR2_(porPagar + cuotas);
+  return { debito: deb, porPagar: fosR2_(porPagar), cuotas: fosR2_(cuotas), credito: credito, prestamos: fosR2_(prestamos), liquidez: fosR2_(deb - credito) };
+}
+
+/* ------------------- Cuadre diario y racha (estilo Duolingo) ------------------- */
+/*
+ * El cuadre del día está hecho cuando: el Inbox no tiene nada sin categorizar (Débito y Crédito) ni posibles duplicados,
+ * abriste la app hoy y (si FOS_TG.RACHA_YAPE) sincronizaste Yape hoy. Cada día cuadrado suma a la racha.
+ * Todo vive en Propiedades del script: FOS_LAST_SEEN, FOS_YAPE_SYNC (ms) y FOS_RACHA ({d:[días yyyy-MM-dd], best}).
+ */
+
+/** Marca «usaste la app» (lo llama cada petición con token válido). Escribe como mucho una vez cada 10 min. */
+function fosTouchSeen_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    const k = 'fos_seen_' + Utilities.formatDate(new Date(), fosTz_(), 'yyyyMMdd');
+    if (cache.get(k)) return;
+    cache.put(k, '1', 600);
+    PropertiesService.getScriptProperties().setProperty('FOS_LAST_SEEN', String(Date.now()));
+  } catch (_) { /* nunca rompe la API */ }
+}
+
+function fosPropDate_(props, key, tz) {
+  const v = Number(props.getProperty(key));
+  return v ? new Date(v) : null;
+}
+
+/** Último día (yyyy-MM-dd) con algo registrado a mano: el ID MAN_YYYYMMDD_… dice cuándo lo cargaste. */
+function fosLastManual_() {
+  let last = '';
+  [[FOS_CFG.SHEETS.DEBITO], [FOS_CFG.SHEETS.CREDITO]].forEach(function (x) {
+    const t = fosReadTable_(x[0], ['ID']);
+    t.rows.forEach(function (r) {
+      const m = /^MAN_(\d{4})(\d{2})(\d{2})_/.exec(String(r[t.idx('ID')]).trim());
+      if (m) { const d = m[1] + '-' + m[2] + '-' + m[3]; if (d > last) last = d; }
+    });
+  });
+  return last || null;
+}
+
+/** Evalúa el cuadre de hoy, actualiza la racha (si hoy quedó cuadrado) y devuelve el estado completo. */
+function fosRachaEval_(now) {
+  const tz = fosTz_();
+  now = now || new Date();
+  const today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+  const props = PropertiesService.getScriptProperties();
+  const inb = fosGetInbox_(), cin = fosGetCreditInbox_();
+  const nD = inb.items.length, nC = cin.items.length, nDup = inb.duplicados.length;
+  const seen = fosPropDate_(props, 'FOS_LAST_SEEN'), yape = fosPropDate_(props, 'FOS_YAPE_SYNC');
+  const day = function (d) { return d ? Utilities.formatDate(d, tz, 'yyyy-MM-dd') : null; };
+  const seenDay = day(seen), yapeDay = day(yape);
+  const items = [
+    { key: 'inbox', ok: nD + nC === 0, n: nD + nC, debito: nD, credito: nC },
+    { key: 'duplicados', ok: nDup === 0, n: nDup },
+    { key: 'app', ok: seenDay === today, last: seenDay },
+  ];
+  if (FOS_TG.RACHA_YAPE) items.push({ key: 'yape', ok: yapeDay === today, last: yapeDay });
+  const cuadrado = items.every(function (i) { return i.ok; });
+
+  let st;
+  try { st = JSON.parse(props.getProperty('FOS_RACHA') || 'null'); } catch (_) { st = null; }
+  if (!st || !Array.isArray(st.d)) st = { d: [], best: 0 };
+  const done = {};
+  st.d.forEach(function (d) { done[d] = true; });
+  let nuevo = false;
+  if (cuadrado && !done[today]) { done[today] = true; nuevo = true; }
+  const yesterday = fosTgDay_(today, -1);
+  let racha = 0;
+  for (let d = done[today] ? today : yesterday; done[d]; d = fosTgDay_(d, -1)) racha++;
+  const best = Math.max(st.best || 0, racha);
+  if (nuevo || best !== st.best) {
+    props.setProperty('FOS_RACHA', JSON.stringify({ d: Object.keys(done).sort().slice(-120), best: best }));
+  }
+  const lastManual = fosLastManual_();
+  return {
+    hoy: today, cuadrado: cuadrado, hechoHoy: !!done[today], racha: racha, best: best, enRiesgo: !done[today] && racha > 0,
+    ayer: !!done[yesterday], items: items,
+    diasSinApp: seenDay ? fosDays_(seenDay, today) : null,
+    ultimoManual: lastManual, diasSinManual: lastManual ? fosDays_(lastManual, today) : null,
+  };
+}
+
+/** API: estado del cuadre y la racha para la app. */
+function fosGetRacha_() {
+  const r = fosRachaEval_();
+  return { racha: r.racha, best: r.best, cuadrado: r.cuadrado, hechoHoy: r.hechoHoy, enRiesgo: r.enRiesgo, items: r.items,
+    diasSinManual: r.diasSinManual, ultimoManual: r.ultimoManual };
+}
+
+/** Líneas de checklist (☐ / ✅) para Telegram. */
+function fosRachaLines_(R, tz) {
+  const fd = function (d) { return d ? d.slice(8, 10) + '/' + d.slice(5, 7) : '—'; };
+  return R.items.map(function (i) {
+    if (i.key === 'inbox') return i.ok ? '✅ Inbox categorizado' : '☐ Categorizar <b>' + i.n + '</b> movimiento' + (i.n === 1 ? '' : 's') + ' (débito ' + i.debito + ' · crédito ' + i.credito + ')';
+    if (i.key === 'duplicados') return i.ok ? '✅ Sin duplicados por revisar' : '☐ Revisar <b>' + i.n + '</b> posible' + (i.n === 1 ? '' : 's') + ' duplicado' + (i.n === 1 ? '' : 's') + ' Yape ↔ BCP';
+    if (i.key === 'app') return i.ok ? '✅ Entraste a Finanzas OS' : '☐ Abrir Finanzas OS' + (i.last ? ' (última vez ' + fd(i.last) + ')' : '');
+    if (i.key === 'yape') return i.ok ? '✅ Yape sincronizado' : '☐ Enviar el reporte de Yape y sincronizarlo' + (i.last ? ' (último ' + fd(i.last) + ')' : '');
+    return '';
+  }).filter(Boolean);
+}
+
+// Frases por nivel de insistencia (0 = mañana … 4 = última llamada). Se rotan por día para no repetir siempre lo mismo.
+const FOS_NUDGE_TEXT = [
+  ['☀️ <b>Buen día.</b> Tu cuadre de hoy toma 2 minutos. Hazlo ahora y te olvidas.', '☀️ <b>Arrancamos.</b> Un vistazo al Inbox y el día queda en orden.', '☀️ <b>Hola.</b> Tus finanzas te esperan: hoy toca cuadrar.'],
+  ['🦉 <b>Pssst…</b> las finanzas no se cuadran solas.', '🦉 <b>Recordatorio de mediodía:</b> el cuadre sigue pendiente.', '🦉 <b>¿Almorzando?</b> Aprovecha y cuadra en un minuto.'],
+  ['⏰ <b>Ya pasó medio día</b> y tu cuadre sigue sin hacerse.', '⏰ <b>Sigo esperando.</b> Tu cuadre de hoy aún está pendiente.', '⏰ <b>Te lo vuelvo a decir:</b> el cuadre de hoy no está hecho.'],
+  ['😬 <b>Esto ya es serio.</b> Se acaba el día y no has cuadrado.', '😬 <b>No me hagas insistir más…</b> tu cuadre sigue pendiente.', '😬 <b>Último aviso amable:</b> cuadra antes de dormir.'],
+  ['🚨 <b>Última llamada.</b>', '🚨 <b>Ahora o nunca.</b>', '🚨 <b>Se acaba el día.</b>'],
+];
+
+/**
+ * Trigger cada hora: a las horas de FOS_TG.NUDGE_HOURS, si el cuadre de hoy sigue pendiente, insiste (cada vez más fuerte).
+ * Si ya cuadraste, te felicita una sola vez al día. Nunca escribe en horas de silencio.
+ */
+function fosNudge() {
+  const tz = fosTz_(), now = new Date();
+  const hour = Number(Utilities.formatDate(now, tz, 'HH'));
+  const level = FOS_TG.NUDGE_HOURS.indexOf(hour);
+  if (level < 0 || hour >= FOS_TG.QUIET_FROM || hour < FOS_TG.QUIET_TO) return;
+  const props = PropertiesService.getScriptProperties();
+  const slot = Utilities.formatDate(now, tz, 'yyyy-MM-dd HH');
+  if (props.getProperty('FOS_NUDGE_LAST') === slot) return; // ya se envió en esta hora
+  FOS_MEMO_ = {};
+  try {
+    const R = fosRachaEval_(now);
+    if (R.cuadrado || R.hechoHoy) {
+      if (props.getProperty('FOS_NUDGE_OK') === R.hoy) { props.setProperty('FOS_NUDGE_LAST', slot); return; }
+      const msg = '🔥 <b>¡Racha de ' + R.racha + ' día' + (R.racha === 1 ? '' : 's') + '!</b>\n\n' +
+        'Hoy ya cuadraste tus finanzas. ' + (R.racha >= R.best && R.racha > 1 ? 'Es tu récord: sigue así. 🏆' : R.best > R.racha ? 'Tu récord es ' + R.best + '. Vas por él.' : 'Mañana, otra vez.') +
+        (R.cuadrado ? '' : '\n\nOjo: entró algo nuevo después del cuadre:\n' + fosRachaLines_(R, tz).filter(function (l) { return l.indexOf('☐') === 0; }).join('\n'));
+      if (FosTelegram.send(msg).ok) { props.setProperty('FOS_NUDGE_OK', R.hoy); props.setProperty('FOS_NUDGE_LAST', slot); }
+      return;
+    }
+    const n = Number(R.hoy.replace(/-/g, '')) % 3;
+    const lvl = Math.min(level, FOS_NUDGE_TEXT.length - 1);
+    const isLast = level === FOS_TG.NUDGE_HOURS.length - 1;
+    const head = [FOS_NUDGE_TEXT[lvl][n]];
+    if (isLast) head.push(R.racha > 0 ? 'A medianoche tu racha de <b>' + R.racha + ' día' + (R.racha === 1 ? '' : 's') + '</b> vuelve a 0. 💔' : 'Hoy puedes empezar tu racha. Mañana me lo agradeces.');
+    else if (R.enRiesgo) head.push('🔥 Tu racha de <b>' + R.racha + ' día' + (R.racha === 1 ? '' : 's') + '</b> está en riesgo.');
+    else if (level === 0 && !R.ayer) head.push('Ayer no cuadraste. Hoy empiezas de nuevo: día 1. 💪');
+    const parts = [head.join('\n'), '<b>Te falta</b>\n' + fosRachaLines_(R, tz).join('\n')];
+    const extra = [];
+    if (R.diasSinApp !== null && R.diasSinApp >= 2) extra.push('👀 Llevas <b>' + R.diasSinApp + ' días</b> sin abrir Finanzas OS. ¿Todo bien?');
+    if (R.diasSinManual !== null && R.diasSinManual >= FOS_TG.MANUAL_STALE_DAYS) {
+      extra.push('✍️ Hace <b>' + R.diasSinManual + ' días</b> que no registras nada a mano (efectivo, IO, Interbank). ¿De verdad no gastaste?');
+    }
+    if (extra.length) parts.push(extra.join('\n'));
+    if (FosTelegram.send(parts.join('\n\n')).ok) props.setProperty('FOS_NUDGE_LAST', slot);
+  } finally {
+    FOS_MEMO_ = null;
+  }
+}
+
 /* ---------------------- Configuración (ejecutar a mano) ------------------ */
 
 /** 1) Ejecuta esta función una vez: genera el API_TOKEN y lo muestra en el Registro de ejecución. */
@@ -342,13 +511,14 @@ function fosTestTelegram() {
 
 /** 3) Instala los triggers de alertas (idempotente; no toca tus triggers del ETL). */
 function fosInstallTriggers() {
-  const ours = ['fosNotifyPending', 'fosNotifyCards', 'fosWatch', 'fosNightly'];
+  const ours = ['fosNotifyPending', 'fosNotifyCards', 'fosWatch', 'fosNightly', 'fosNudge'];
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (ours.indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('fosWatch').timeBased().everyHours(1).create();
   ScriptApp.newTrigger('fosNotifyCards').timeBased().everyDays(1).atHour(FOS_TG.MORNING_HOUR).create();
   ScriptApp.newTrigger('fosNightly').timeBased().everyDays(1).atHour(FOS_TG.NIGHT_HOUR).create();
-  Logger.log('Triggers instalados: fosWatch (cada hora), fosNotifyCards (~' + FOS_TG.MORNING_HOUR + ' h) y fosNightly (~' + FOS_TG.NIGHT_HOUR +
+  ScriptApp.newTrigger('fosNudge').timeBased().everyHours(1).create();
+  Logger.log('Triggers instalados: fosWatch y fosNudge (cada hora; fosNudge solo escribe a las ' + FOS_TG.NUDGE_HOURS.join(', ') + ' h), fosNotifyCards (~' + FOS_TG.MORNING_HOUR + ' h) y fosNightly (~' + FOS_TG.NIGHT_HOUR +
     ' h). La hora usa la zona del proyecto (Configuración del proyecto > Zona horaria: America/Lima).');
 }
