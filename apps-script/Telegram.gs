@@ -314,8 +314,10 @@ function fosEtlDone(fuente, nuevos, errores) {
 
 /**
  * restante débito (cierre del mes) − total crédito (consumos directos por pagar + cuotas del mes sin pagar).
- * Los préstamos (Tipo «Prestamo») se informan aparte y NO restan. credito = null si falta la hoja Tarjetas.
+ * Los préstamos (Tipo «Prestamo» o categoría «Préstamo») se informan aparte y NO restan. credito = null si falta la hoja Tarjetas.
  */
+function fosIsLoan_(p) { return p.tipo === 'Préstamo' || /^prestamos?$/.test(fosNorm_(p.categoria)); }
+
 function fosLiquidez_() {
   const deb = fosGetSummary_({}).debito.cierre;
   let cards = null;
@@ -323,7 +325,7 @@ function fosLiquidez_() {
   if (!cards) return { debito: deb, porPagar: null, cuotas: null, credito: null, prestamos: null, liquidez: null };
   let porPagar = 0, prestamos = 0, cuotas = 0;
   cards.forEach(function (c) {
-    c.pendientes.forEach(function (p) { if (p.tipo === 'Préstamo') prestamos += p.monto; else porPagar += p.monto; });
+    c.pendientes.forEach(function (p) { if (fosIsLoan_(p)) prestamos += p.monto; else porPagar += p.monto; });
     cuotas += c.cuotaMes;
   });
   const credito = fosR2_(porPagar + cuotas);
