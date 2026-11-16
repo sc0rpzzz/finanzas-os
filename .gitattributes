@@ -1,0 +1,4 @@
+# Fin de línea uniforme (LF) en el repo, sin importar desde qué sistema se edite
+* text=auto eol=lf
+*.png binary
+*.ico binary

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pruebas del servidor</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; background: #020617; color: #e2e8f0; margin: 0; padding: 16px; }
+    h1 { font-size: 18px; } h2 { font-size: 15px; margin-top: 20px; }
+    li { margin: 2px 0; } .ok { color: #6ee7b7; } .fail { color: #fda4af; } .muted { color: #94a3b8; }
+    pre { white-space: pre-wrap; color: #fda4af; margin: 2px 0 8px 20px; font-size: 12px; }
+  </style>
+  <script src="gas-mock.js"></script>
+  <script src="server.test.js"></script>
+</head>
+<body>
+  <h1>FINANZAS OS · pruebas del servidor</h1>
+  <p class="muted">Ejecuta los .gs reales sobre un mock de Apps Script. Con <code>?orig=/ruta/</code> compara además contra otra copia del código (diferencial).</p>
+  <div id="out"></div>
+<script>
+(async () => {
+  const T = window.FosServerTests;
+  const out = document.getElementById('out');
+  const params = new URLSearchParams(location.search);
+  const results = { pass: 0, fail: 0, failures: [] };
+  const section = (title) => { out.insertAdjacentHTML('beforeend', `<h2>${title}</h2><ul></ul>`); return out.lastElementChild; };
+  const line = (ul, name, e) => {
+    const li = document.createElement('li');
+    li.className = e ? 'fail' : 'ok'; li.textContent = (e ? '✗ ' : '✓ ') + name; ul.append(li);
+    if (e) { const pre = document.createElement('pre'); pre.textContent = e.message; ul.append(pre); results.fail++; results.failures.push(name + ': ' + e.message); } else results.pass++;
+  };
+  const source = async (base) => (await Promise.all(T.FILES.map((f) => fetch(base + f, { cache: 'no-store' }).then((r) => { if (!r.ok) throw new Error('No se pudo leer ' + base + f); return r.text(); })))).join('\n;\n');
+  const run = (src, tests, ul) => tests.forEach(([name, fn]) => {
+    let e = null;
+    try { fn(GasMock.load(src, { sheets: T.fixture() })); } catch (x) { e = x; }
+    line(ul, name, e);
+  });
+
+  try {
+    const NEW_SRC = await source(params.get('src') || '../apps-script/');
+    run(NEW_SRC, T.NEW, section('Comportamiento nuevo'));
+    run(NEW_SRC, T.REG, section('Lo que ya funcionaba'));
+    const ulTg = section('Avisos de Telegram (reloj simulado)');
+    const make = (now) => GasMock.load(NEW_SRC, { sheets: T.fixture(), now, props: { TELEGRAM_BOT_TOKEN: 'test', TELEGRAM_CHAT_ID: '1' } });
+    T.TG.forEach(([name, fn]) => { let e = null; try { fn(make); } catch (x) { e = x; } line(ulTg, name, e); });
+    const orig = params.get('orig');
+    if (orig) {
+      const OLD_SRC = await source(orig);
+      const ul = section('Diferencial: código anterior vs. nuevo con los mismos datos');
+      T.READS.forEach(([action, payload]) => {
+        let e = null;
+        try {
+          const a = GasMock.load(OLD_SRC, { sheets: T.fixture() }).call(action, payload), b = GasMock.load(NEW_SRC, { sheets: T.fixture() }).call(action, payload);
+          if (!a.ok || !b.ok) throw new Error('falló: ' + JSON.stringify([a.error, b.error]));
+          if (T.normalize(action, a.data) !== T.normalize(action, b.data)) throw new Error('la respuesta cambió');
+        } catch (x) { e = x; }
+        line(ul, 'lectura igual: ' + action + (payload ? ' ' + JSON.stringify(payload) : ''), e);
+      });
+      let e = null;
+      try {
+        const A = GasMock.load(OLD_SRC, { sheets: T.fixture() }), B = GasMock.load(NEW_SRC, { sheets: T.fixture() });
+        T.WRITES.forEach(([action, payload]) => {
+          const a = A.call(action, payload), b = B.call(action, payload);
+          if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(action + ': respuesta distinta ' + JSON.stringify([a, b]));
+        });
+        if (T.dumpSheets(A) !== T.dumpSheets(B)) throw new Error('las hojas quedaron distintas');
+      } catch (x) { e = x; }
+      line(ul, 'escrituras dejan las hojas idénticas (' + T.WRITES.map((w) => w[0]).join(', ') + ')', e);
+      const ul2 = section('Referencia: las pruebas nuevas contra el código anterior (se espera que fallen)');
+      T.NEW.forEach(([name, fn]) => { let x = null; try { fn(GasMock.load(OLD_SRC, { sheets: T.fixture() })); } catch (y) { x = y; } const li = document.createElement('li'); li.className = 'muted'; li.textContent = (x ? 'falla (esperado) · ' : 'pasa · ') + name; ul2.append(li); });
+    }
+  } catch (x) { results.fail++; results.failures.push('runner: ' + x.message); out.insertAdjacentHTML('beforeend', '<pre></pre>'); out.lastElementChild.textContent = x.stack || x.message; }
+  const sum = document.createElement('p');
+  sum.className = results.fail ? 'fail' : 'ok';
+  sum.textContent = `${results.pass} OK · ${results.fail} con error`;
+  out.prepend(sum);
+  window.__results = results;
+})();
+</script>
+</body>
+</html>
